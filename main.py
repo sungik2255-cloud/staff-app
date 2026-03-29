@@ -1,0 +1,488 @@
+import streamlit as st
+import pandas as pd
+import os
+import time
+from datetime import date, datetime
+import calendar
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+# ── 1. Page Config & File Paths ──────────────────────────────
+st.set_page_config(page_title="Staff Leave Management", layout="wide")
+LOC_FILE = "locations.csv"
+EMP_FILE = "employees.csv"
+LOG_FILE = "work_log.csv"
+RESIGNED_FILE = "resigned_employees.csv"
+LEAVE_FILE = "leave_usage.csv"
+
+# ── 2. Login System ───────────────────────────────────────────
+def check_login():
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+        st.session_state.role = None
+        st.session_state.username = None
+
+    if not st.session_state.logged_in:
+        col1, col2, col3 = st.columns([1, 1.2, 1])
+        with col2:
+            st.markdown("<br><br>", unsafe_allow_html=True)
+            st.markdown("<h2 style='text-align:center;'>🏢 Staff Leave Management</h2>", unsafe_allow_html=True)
+            st.markdown("<h4 style='text-align:center; color:gray;'>Please log in to continue</h4>", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            with st.container(border=True):
+                username = st.text_input("👤 Username")
+                password = st.text_input("🔒 Password", type="password")
+                if st.button("Login", type="primary", use_container_width=True):
+                    try:
+                        admin_user  = st.secrets["admin_username"]
+                        admin_pw    = st.secrets["admin_password"]
+                        viewer_user = st.secrets["viewer_username"]
+                        viewer_pw   = st.secrets["viewer_password"]
+                    except:
+                        # 로컬 테스트용 기본값
+                        admin_user, admin_pw   = "admin", "admin123"
+                        viewer_user, viewer_pw = "viewer", "viewer123"
+
+                    if username == admin_user and password == admin_pw:
+                        st.session_state.logged_in = True
+                        st.session_state.role = "admin"
+                        st.session_state.username = username
+                        st.rerun()
+                    elif username == viewer_user and password == viewer_pw:
+                        st.session_state.logged_in = True
+                        st.session_state.role = "viewer"
+                        st.session_state.username = username
+                        st.rerun()
+                    else:
+                        st.error("❌ Incorrect username or password.")
+        st.stop()
+
+def show_sidebar_user():
+    role_label = "🔑 Admin" if st.session_state.role == "admin" else "👁️ Viewer"
+    st.sidebar.markdown(f"**{role_label}** ({st.session_state.username})")
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🚪 Logout", use_container_width=True):
+        st.session_state.logged_in = False
+        st.session_state.role = None
+        st.session_state.username = None
+        st.rerun()
+
+def is_admin():
+    return st.session_state.get("role") == "admin"
+
+# 로그인 실행
+check_login()
+show_sidebar_user()
+
+# ── 3. Smart Rules Database ───────────────────────────────────
+SICK_LEAVE_RULES = {
+    "Manhattan":     {"text": "⚖️ **NYC Law**: 1 hour for every 30 hours worked (Up to 40-56h/yr).", "rate": 30, "max": 40},
+    "Flushing":      {"text": "⚖️ **NYC Law**: 1 hour for every 30 hours worked (Up to 40-56h/yr).", "rate": 30, "max": 40},
+    "Philadelphia":  {"text": "⚖️ **Philadelphia Law**: 1 hour for every 40 hours worked (Up to 40h/yr).", "rate": 40, "max": 40},
+    "Orlando":       {"text": "⚠️ **Florida Law**: No state-mandated paid sick leave. You can set custom rates below.", "rate": None, "max": None},
+}
+
+# ── 4. Data Loading Functions ─────────────────────────────────
+def load_locations():
+    if os.path.exists(LOC_FILE):
+        try:
+            df = pd.read_csv(LOC_FILE).dropna(subset=['company_name', 'city_name']).reset_index(drop=True)
+            if not df.empty: df.index = df.index + 1; return df
+        except: pass
+    return pd.DataFrame([{"company_name": "Amlotus", "city_name": "Manhattan"}], index=[1])
+
+def load_employees():
+    cols = ["Name", "Email", "Location", "Type", "Vacation_Limit", "Sick_Rate", "Sick_Max"]
+    if os.path.exists(EMP_FILE):
+        try:
+            df = pd.read_csv(EMP_FILE).drop_duplicates().reset_index(drop=True)
+            df['Email'] = df['Email'].astype(str).replace("nan", ""); df.index = df.index + 1; return df
+        except: pass
+    return pd.DataFrame(columns=cols)
+
+def load_work_logs():
+    cols = ["Employee", "Status", "Start_Date", "End_Date", "Hours_Worked"]
+    if os.path.exists(LOG_FILE):
+        try:
+            df = pd.read_csv(LOG_FILE)
+            if "Status" not in df.columns: df["Status"] = "Employed"
+            df['Start_Date'] = pd.to_datetime(df['Start_Date']).dt.date
+            df['End_Date'] = pd.to_datetime(df['End_Date']).dt.date
+            df = df.reset_index(drop=True); df.index = df.index + 1; return df
+        except: pass
+    return pd.DataFrame(columns=cols)
+
+def load_resigned():
+    cols = ["Name", "Resigned_Date", "Location", "Total_Worked", "Retained_Vacation", "Retained_Sick", "Paid_Date", "Paid_Amount", "Email", "Type", "Vacation_Limit", "Sick_Rate", "Sick_Max"]
+    if os.path.exists(RESIGNED_FILE):
+        try:
+            df = pd.read_csv(RESIGNED_FILE)
+            for c in cols:
+                if c not in df.columns: df[c] = "" if any(x in c for x in ["Email", "Type", "Location", "Name"]) else 0.0
+            df['Email'] = df['Email'].astype(str).replace("nan", ""); return df
+        except: pass
+    return pd.DataFrame(columns=cols)
+
+def load_leave_usage():
+    if os.path.exists(LEAVE_FILE):
+        try:
+            df = pd.read_csv(LEAVE_FILE)
+            if "Status" not in df.columns: df["Status"] = "Used"
+            return df
+        except: pass
+    return pd.DataFrame(columns=["Employee", "Date", "Vacation_Used", "Sick_Used", "Note", "Status"])
+
+# ── 5. Session Initializer ────────────────────────────────────
+if 'city_df' not in st.session_state: st.session_state.city_df = load_locations()
+if 'emp_df' not in st.session_state: st.session_state.emp_df = load_employees()
+if 'log_df' not in st.session_state: st.session_state.log_df = load_work_logs()
+if 'leave_df' not in st.session_state: st.session_state.leave_df = load_leave_usage()
+
+# ── 6. Sidebar Menu (role별 분리) ─────────────────────────────
+if is_admin():
+    menu = st.sidebar.radio("Go to", ["1. Employee Setup", "2. Log Worked Hours", "3. Plan/Submit Leave", "4. Dashboard & Email"])
+else:
+    st.sidebar.info("👁️ View-only mode")
+    menu = st.sidebar.radio("Go to", ["2. Log Worked Hours", "3. Plan/Submit Leave", "4. Dashboard & Email"])
+
+# ═══════════════════════════════════════════════════════════════
+# 1. Employee Setup  (Admin only)
+# ═══════════════════════════════════════════════════════════════
+if menu == "1. Employee Setup":
+    if not is_admin():
+        st.warning("⛔ Admin access required."); st.stop()
+    st.title("🏢 Staff Leave Management System")
+    col1, col2 = st.columns([1, 1.2], gap="large")
+    with col1:
+        st.subheader("📍 City & Company Setup")
+        with st.container(border=True):
+            nc, ny = st.text_input("Company Name"), st.text_input("City Name")
+            if st.button("Add to List", use_container_width=True):
+                if nc and ny:
+                    new_row = pd.DataFrame([{"company_name": nc, "city_name": ny}])
+                    pd.concat([st.session_state.city_df.reset_index(drop=True), new_row], ignore_index=True).to_csv(LOC_FILE, index=False)
+                    st.session_state.city_df = load_locations(); st.success("✅ Saved!"); time.sleep(1); st.rerun()
+        disp_c = st.session_state.city_df.copy(); disp_c.insert(0, "Select", False)
+        ed_c = st.data_editor(disp_c, use_container_width=True, key="ced")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Save Changes", use_container_width=True):
+                ed_c.drop(columns=["Select"]).reset_index(drop=True).to_csv(LOC_FILE, index=False)
+                st.session_state.city_df = load_locations(); st.success("✅ Saved!"); time.sleep(1); st.rerun()
+        with c2:
+            if st.button("🗑️ Delete Selected Company", use_container_width=True):
+                if ed_c["Select"].any(): st.session_state.loc_del_conf = True
+        if st.session_state.get('loc_del_conf', False):
+            st.error("⚠️ Delete selected company?"); cy, cn = st.columns([1, 4])
+            with cy:
+                if st.button("Yes", key="ly"):
+                    st.session_state.city_df.drop(ed_c[ed_c["Select"] == True].index).reset_index(drop=True).to_csv(LOC_FILE, index=False)
+                    st.session_state.city_df = load_locations(); st.session_state.loc_del_conf = False; st.success("✅ Saved!"); time.sleep(1); st.rerun()
+            with cn:
+                if st.button("No", key="ln"): st.session_state.loc_del_conf = False; st.rerun()
+    with col2:
+        st.subheader("👤 Add Employee")
+        v_df = st.session_state.city_df.dropna()
+        loc_opts = ["Select Location"] + [f"{r['company_name']} - {r['city_name']}" for _, r in v_df.iterrows()]
+        with st.container(border=True):
+            nm, em, lo = st.text_input("Name"), st.text_input("Email"), st.selectbox("Location", options=loc_opts)
+            ar, ms = 40, 40
+            if lo != "Select Location":
+                city_part = lo.split(" - ")[-1].strip()
+                rule = SICK_LEAVE_RULES.get(city_part, {"text": "ℹ️ No law found.", "rate": None, "max": None})
+                st.info(rule["text"])
+                if rule["rate"] is None:
+                    st.columns(2); ar = st.number_input("Sick Rate (1hr per X)", value=40); ms = st.number_input("Sick Max", value=40)
+                else: ar, ms = rule["rate"], rule["max"]
+            et = st.selectbox("Type", ["Full-Time", "Part-Time (with vacation)", "Part-Time (No vacation)"])
+            vl = st.number_input("Annual Vacation Limit", value=(80.0 if "Full" in et else (40.0 if "with" in et else 0.0)))
+            if st.button("Add Employee", type="primary", use_container_width=True):
+                if nm and em and lo != "Select Location":
+                    new_p = pd.DataFrame([{"Name": nm, "Email": em, "Location": lo, "Type": et, "Vacation_Limit": vl, "Sick_Rate": ar, "Sick_Max": ms}])
+                    pd.concat([st.session_state.emp_df.reset_index(drop=True), new_p], ignore_index=True).to_csv(EMP_FILE, index=False)
+                    st.session_state.emp_df = load_employees(); st.success("✅ Saved!"); time.sleep(1); st.rerun()
+
+# ═══════════════════════════════════════════════════════════════
+# 2. Log Worked Hours
+# ═══════════════════════════════════════════════════════════════
+elif menu == "2. Log Worked Hours":
+    st.session_state.emp_df = load_employees(); st.session_state.log_df = load_work_logs()
+    st.markdown("### ⏳ Log Worked Hours")
+    rc_list = [f"{r['company_name']} - {r['city_name']}" for _, r in st.session_state.city_df.iterrows()]
+    sc = st.selectbox("Select Company", options=rc_list)
+    dr = st.date_input("Select Work Period", value=(date.today(), date.today()))
+    ce = st.session_state.emp_df[st.session_state.emp_df["Location"] == sc].copy()
+
+    if not ce.empty:
+        idat = pd.DataFrame({"Select": [False]*len(ce), "Employee Name": ce["Name"].values, "Email": ce["Email"].values, "Employee Status": ["Employed"]*len(ce), "Hours Worked": [0.0]*len(ce)})
+        ed_in = st.data_editor(idat, column_config={"Select": st.column_config.CheckboxColumn("Select"), "Employee Status": st.column_config.SelectboxColumn(options=["Employed", "Resigned"], required=True)}, use_container_width=True, height=400, key="win_ed", disabled=not is_admin())
+
+        if not is_admin():
+            st.info("👁️ View-only mode: saving is disabled.")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🚀 Save Worked Hours", type="primary", use_container_width=True, disabled=not is_admin()):
+                if isinstance(dr, (list, tuple)) and len(dr) == 2:
+                    nl = []; r_names = []; full_emp = pd.read_csv(EMP_FILE); cu = load_leave_usage()
+                    for _, r in ed_in.iterrows():
+                        if r["Employee Status"] == "Resigned": r_names.append(r["Employee Name"])
+                        if r["Hours Worked"] > 0: nl.append({"Employee": r["Employee Name"], "Status": r["Employee Status"], "Start_Date": dr[0], "End_Date": dr[1], "Hours_Worked": r["Hours Worked"]})
+                    if nl: pd.concat([st.session_state.log_df.reset_index(drop=True), pd.DataFrame(nl)], ignore_index=True).to_csv(LOG_FILE, index=False)
+                    if r_names:
+                        r_recs = []; logs = load_work_logs()
+                        for rn in r_names:
+                            inf = full_emp[full_emp["Name"] == rn].iloc[0]; tw = logs[logs["Employee"] == rn]["Hours_Worked"].sum()
+                            uv, us = cu[cu["Employee"] == rn]["Vacation_Used"].sum(), cu[cu["Employee"] == rn]["Sick_Used"].sum()
+                            r_recs.append({"Name": rn, "Resigned_Date": dr[1], "Location": inf["Location"], "Total_Worked": tw, "Retained_Vacation": round(float(inf["Vacation_Limit"]) - uv, 2), "Retained_Sick": round((tw / float(inf["Sick_Rate"])) - us, 2), "Paid_Date": dr[1], "Paid_Amount": 0.0, "Email": str(inf["Email"]), "Type": inf["Type"], "Vacation_Limit": inf["Vacation_Limit"], "Sick_Rate": inf["Sick_Rate"], "Sick_Max": inf["Sick_Max"]})
+                        pd.concat([load_resigned(), pd.DataFrame(r_recs)], ignore_index=True).to_csv(RESIGNED_FILE, index=False)
+                        full_emp[~full_emp["Name"].isin(r_names)].to_csv(EMP_FILE, index=False)
+                    st.success("✅ Saved!"); time.sleep(1); st.rerun()
+        with c2:
+            if st.button("🗑️ Delete Selected Employees", use_container_width=True, disabled=not is_admin()):
+                if ed_in["Select"].any(): st.session_state.emp_del_conf = True
+        if st.session_state.get('emp_del_conf', False):
+            st.error("⚠️ Delete selected employees?"); dy, dn = st.columns([1, 4])
+            with dy:
+                if st.button("Yes", key="ey_emp"):
+                    fe = pd.read_csv(EMP_FILE); fe[~fe["Name"].isin(ed_in[ed_in["Select"] == True]["Employee Name"].tolist())].to_csv(EMP_FILE, index=False)
+                    st.session_state.emp_del_conf = False; st.success("✅ Saved!"); time.sleep(1); st.rerun()
+            with dn:
+                if st.button("No", key="en_emp"): st.session_state.emp_del_conf = False; st.rerun()
+
+    st.markdown("---")
+    # ── Filter & Download Logs (위 Company/Period 자동 연동) ──
+    st.session_state.log_df = load_work_logs()
+    if not st.session_state.log_df.empty:
+        with st.expander("🔍 Filter & Download Logs", expanded=True):
+            st.info(f"🏢 Company: **{sc}**  |  📅 Period: **{dr[0] if isinstance(dr, (list,tuple)) and len(dr)==2 else ''}** ~ **{dr[1] if isinstance(dr, (list,tuple)) and len(dr)==2 else ''}**")
+            emp_in_company = st.session_state.emp_df[st.session_state.emp_df["Location"] == sc]["Name"].tolist()
+            emp_opts = ["All Employees"] + sorted(emp_in_company)
+            sfn = st.selectbox("Select Employee", options=emp_opts, key="filter_emp")
+            fdf = st.session_state.log_df.copy()
+            fdf = fdf[fdf["Employee"].isin(emp_in_company)]
+            if sfn != "All Employees": fdf = fdf[fdf["Employee"] == sfn]
+            if isinstance(dr, (list, tuple)) and len(dr) == 2:
+                fdf = fdf[(fdf["Start_Date"] >= dr[0]) & (fdf["Start_Date"] <= dr[1])]
+            if not fdf.empty:
+                st.download_button(label="📥 Download Logs", data=fdf.reset_index(drop=True).to_csv(index=False).encode('utf-8-sig'), file_name="WorkLog.csv", mime="text/csv")
+
+        ldat = fdf.reset_index(drop=True).copy()
+        ldat.insert(0, "No.", range(1, len(ldat) + 1))
+        ldat.insert(1, "Select", False)
+        ed_l = st.data_editor(ldat, use_container_width=True, key="led", hide_index=True)
+        col_del, col_save = st.columns(2)
+        with col_del:
+            if st.button("🗑️ Delete Selected Logs", use_container_width=True, disabled=not is_admin()):
+                if ed_l["Select"].any(): st.session_state.log_del_conf = True
+        with col_save:
+            if st.button("💾 Save Log Changes", type="primary", use_container_width=True, disabled=not is_admin()):
+                full_log = load_work_logs()
+                for _, row in ed_l.iterrows():
+                    orig_idx = fdf.index[int(row["No."]) - 1] if int(row["No."]) - 1 < len(fdf) else None
+                    if orig_idx is not None:
+                        full_log.at[orig_idx, "Hours_Worked"] = row.get("Hours_Worked", 0)
+                full_log.to_csv(LOG_FILE, index=False)
+                st.success("✅ Saved!"); time.sleep(1); st.rerun()
+        if st.session_state.get('log_del_conf', False):
+            st.error("⚠️ Delete selected log entries?")
+            ly, ln = st.columns([1, 4])
+            with ly:
+                if st.button("Yes", key="ly_log"):
+                    full_log = load_work_logs()
+                    del_emp_names = ed_l[ed_l["Select"] == True]["Employee"].tolist()
+                    del_start = ed_l[ed_l["Select"] == True]["Start_Date"].tolist()
+                    mask = ~(full_log["Employee"].isin(del_emp_names) & full_log["Start_Date"].isin(del_start))
+                    full_log[mask].reset_index(drop=True).to_csv(LOG_FILE, index=False)
+                    st.session_state.log_del_conf = False; st.success("✅ Saved!"); time.sleep(1); st.rerun()
+            with ln:
+                if st.button("No", key="ln_log"): st.session_state.log_del_conf = False; st.rerun()
+
+# ═══════════════════════════════════════════════════════════════
+# 3. Plan & Submit Leave
+# ═══════════════════════════════════════════════════════════════
+elif menu == "3. Plan/Submit Leave":
+    st.title("📅 Plan & Submit Leave")
+    ce, cl, cu = load_employees(), load_work_logs(), load_leave_usage()
+    cy1, cm1, _ = st.columns([1, 1, 3])
+    with cy1: today = date.today(); c_year = st.selectbox("Year", range(today.year-1, today.year+2), index=1)
+    with cm1: c_month = st.selectbox("Month", range(1, 13), index=today.month-1)
+    cal = calendar.monthcalendar(c_year, c_month); month_name = calendar.month_name[c_month]
+    cal_html = f"<div style='text-align:center; font-weight:bold; font-size:24px; margin-bottom:10px;'>{month_name} {c_year}</div>"
+    cal_html += "<table style='width:100%; border-collapse: collapse; table-layout: fixed;'>"
+    cal_html += "<tr><th style='border:1px solid #ddd; background:#f4f4f4;'>Sun</th><th style='border:1px solid #ddd; background:#f4f4f4;'>Mon</th><th style='border:1px solid #ddd; background:#f4f4f4;'>Tue</th><th style='border:1px solid #ddd; background:#f4f4f4;'>Wed</th><th style='border:1px solid #ddd; background:#f4f4f4;'>Thu</th><th style='border:1px solid #ddd; background:#f4f4f4;'>Fri</th><th style='border:1px solid #ddd; background:#f4f4f4;'>Sat</th></tr>"
+    for week in cal:
+        cal_html += "<tr style='height:120px;'>"
+        for day in week:
+            if day == 0: cal_html += "<td style='border:1px solid #ddd; background:#fafafa;'></td>"
+            else:
+                curr_date_str = f"{c_year}-{c_month:02d}-{day:02d}"; day_data = cu[cu["Date"] == curr_date_str]
+                cell = f"<div style='font-weight:bold; font-size:16px;'>{day}</div>"
+                for _, row in day_data.iterrows():
+                    hrs = row["Vacation_Used"] if row["Vacation_Used"] > 0 else row["Sick_Used"]
+                    s_char = "P" if row["Status"] == "Plan" else "U"; color = "#1E90FF" if row["Status"] == "Plan" else "#2E8B57"
+                    cell += f"<div style='background:{color}; color:white; font-size:11px; border-radius:3px; padding:2px; margin-bottom:2px;'>{row['Employee']}({s_char}, {hrs}h)</div>"
+                cal_html += f"<td style='border:1px solid #ddd; vertical-align:top; padding:8px;'>{cell}</td>"
+        cal_html += "</tr>"
+    st.markdown(cal_html + "</table>", unsafe_allow_html=True)
+    st.markdown("---")
+    with st.container(border=True):
+        i1, i2, i3, i4, i5 = st.columns(5)
+        with i1: p_emp = st.selectbox("Employee Name", ce["Name"].tolist())
+        with i2: p_date = st.date_input("Date", value=date.today())
+        with i3: p_type = st.selectbox("Leave Type", ["Vacation", "Sick Leave"])
+        with i4: p_status = st.selectbox("Status", ["Plan", "Used"])
+        with i5: p_hours = st.number_input("Hours", min_value=0.5, step=0.5, value=8.0)
+        if st.button("Submit to Calendar", type="primary", use_container_width=True, disabled=not is_admin()):
+            new_l = pd.DataFrame([{"Employee": p_emp, "Date": p_date.strftime('%Y-%m-%d'), "Vacation_Used": p_hours if p_type == "Vacation" else 0.0, "Sick_Used": p_hours if p_type == "Sick Leave" else 0.0, "Status": p_status, "Note": ""}])
+            pd.concat([cu, new_l], ignore_index=True).to_csv(LEAVE_FILE, index=False); st.success("✅ Saved!"); time.sleep(1); st.rerun()
+
+    st.subheader("📊 Current Balances")
+    th = cl.groupby("Employee")["Hours_Worked"].sum().reset_index() if not cl.empty else pd.DataFrame(columns=["Employee", "Hours_Worked"])
+    tu = cu[cu["Status"] == "Used"].groupby("Employee").agg({"Vacation_Used": "sum", "Sick_Used": "sum"}).reset_index() if not cu.empty else pd.DataFrame(columns=["Employee", "Vacation_Used", "Sick_Used"])
+    summ = []
+    for _, e in ce.iterrows():
+        w = th[th["Employee"] == e["Name"]]["Hours_Worked"].values; tw = round(float(w[0]), 2) if len(w) > 0 else 0.0
+        u = tu[tu["Employee"] == e["Name"]]; uv, us = (u["Vacation_Used"].sum(), u["Sick_Used"].sum()) if not u.empty else (0.0, 0.0)
+        sr = float(e.get("Sick_Rate", 40)) if float(e.get("Sick_Rate", 0)) > 0 else 40
+        s_acc = min(round(tw / sr, 2), float(e.get("Sick_Max", 40)))
+        summ.append({"Name": e["Name"], "Location": e["Location"], "Total Worked": tw, "Total Vacation": round(float(e["Vacation_Limit"]), 2), "Used Vacation": uv, "Retained Vacation": round(float(e["Vacation_Limit"]) - uv, 2), "Sick Leave Accrued": s_acc, "Used Sick Leave": us, "Retained Sick Leave": round(s_acc - us, 2)})
+    if summ:
+        df_summ = pd.DataFrame(summ); df_summ.insert(0, "Select", False)
+        def apply_st(val): return 'background-color: #FFC0CB; color: black; font-weight: bold' if isinstance(val, (int, float)) and val < 0 else 'background-color: #FFFF00; color: black; font-weight: bold'
+        edited_summ = st.data_editor(df_summ.style.applymap(apply_st, subset=['Retained Vacation', 'Retained Sick Leave']).format(precision=2), use_container_width=True, hide_index=True, key="bal_editor")
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            if st.button("💾 Save Balances Changes", use_container_width=True, disabled=not is_admin()):
+                emp_data = pd.read_csv(EMP_FILE)
+                for _, row in edited_summ.iterrows(): emp_data.loc[emp_data["Name"] == row["Name"], "Vacation_Limit"] = row["Total Vacation"]
+                emp_data.to_csv(EMP_FILE, index=False); st.success("✅ Saved!"); time.sleep(1); st.rerun()
+        with col_b2:
+            if st.button("🗑️ Delete Selected Employees", use_container_width=True, disabled=not is_admin()):
+                if edited_summ["Select"].any():
+                    emp_data = pd.read_csv(EMP_FILE); names = edited_summ[edited_summ["Select"] == True]["Name"].tolist()
+                    emp_data[~emp_data["Name"].isin(names)].to_csv(EMP_FILE, index=False); st.success("✅ Saved!"); time.sleep(1); st.rerun()
+
+    with st.expander("📥 Download & Manage Usage/Plan Logs"):
+        if not cu.empty:
+            fl_emp = st.selectbox("Select Employee to Filter", ["All Employees"] + sorted(cu["Employee"].unique().tolist()), key="f_del")
+            cu_to_edit = cu.copy() if fl_emp == "All Employees" else cu[cu["Employee"] == fl_emp]
+            if not cu_to_edit.empty:
+                st.download_button(label=f"📥 Download [{fl_emp}] Leave History", data=cu_to_edit.to_csv(index=False).encode('utf-8-sig'), file_name="LeaveHistory.csv", mime="text/csv", use_container_width=True)
+            cu_disp = cu_to_edit.copy(); cu_disp.insert(0, "Select", False)
+            ed_usage = st.data_editor(cu_disp, use_container_width=True, key="usage_final", hide_index=True)
+            if st.button("Delete Selected Entries", disabled=not is_admin()):
+                if ed_usage["Select"].any(): st.session_state.usage_del_conf = True
+            if st.session_state.get('usage_del_conf', False):
+                st.error("⚠️ Permanently delete selected entries?"); uy_c, un_c = st.columns([1, 4])
+                with uy_c:
+                    if st.button("Yes", key="uy_usage"):
+                        cu.drop(ed_usage[ed_usage["Select"] == True].index).reset_index(drop=True).to_csv(LEAVE_FILE, index=False)
+                        st.session_state.usage_del_conf = False; st.success("✅ Saved!"); time.sleep(1); st.rerun()
+                with un_c:
+                    if st.button("No", key="un_usage"): st.session_state.usage_del_conf = False; st.rerun()
+
+# ═══════════════════════════════════════════════════════════════
+# 4. Dashboard & Email
+# ═══════════════════════════════════════════════════════════════
+elif menu == "4. Dashboard & Email":
+    st.title("📊 Dashboard & Email")
+    rdf = load_resigned(); all_emp = load_employees()
+    if not rdf.empty:
+        st.subheader("👤 Resigned Employee List")
+        def apply_res_style(df):
+            style_df = pd.DataFrame('', index=df.index, columns=df.columns)
+            mask = df.applymap(lambda x: isinstance(x, (int, float)) and x < 0); style_df[mask] = 'background-color: #FFC0CB; color: black; font-weight: bold'; return style_df
+        edited_rdf = st.data_editor(rdf.assign(Select=False).style.apply(apply_res_style, axis=None).format(precision=2), use_container_width=True, height=300, key="res")
+        c1, c2, c3 = st.columns([1, 1, 4])
+        with c1:
+            if st.button("🔄 Restore", disabled=not is_admin()):
+                sel = edited_rdf[edited_rdf["Select"] == True]
+                if not sel.empty:
+                    m_emp = pd.read_csv(EMP_FILE)
+                    for _, r in sel.iterrows():
+                        new = pd.DataFrame([{"Name": r["Name"], "Email": r["Email"], "Location": r["Location"], "Type": r["Type"], "Vacation_Limit": r["Vacation_Limit"], "Sick_Rate": r["Sick_Rate"], "Sick_Max": r["Sick_Max"]}])
+                        m_emp = pd.concat([m_emp, new], ignore_index=True)
+                    m_emp.to_csv(EMP_FILE, index=False); rdf.drop(sel.index).to_csv(RESIGNED_FILE, index=False); st.success("✅ Saved!"); time.sleep(1); st.rerun()
+        with c2:
+            if st.button("🗑️ Delete", disabled=not is_admin()):
+                rdf.drop(edited_rdf[edited_rdf["Select"] == True].index).to_csv(RESIGNED_FILE, index=False); st.success("✅ Saved!"); time.sleep(1); st.rerun()
+        with c3:
+            if st.button("💾 Save", disabled=not is_admin()):
+                edited_rdf.drop(columns=["Select"]).to_csv(RESIGNED_FILE, index=False); st.success("✅ Saved!"); time.sleep(1); st.rerun()
+        st.markdown("---")
+        st.subheader("📑 Detailed History (Resigned Staff)")
+        fl = load_work_logs(); usage_data = load_leave_usage()
+        for name in rdf["Name"].tolist():
+            with st.expander(f"🔍 Detail for: {name}"):
+                r_info = rdf[rdf["Name"] == name].iloc[0]; emp_logs = fl[fl["Employee"] == name].sort_values(by="Start_Date")
+                emp_usage = usage_data[(usage_data["Employee"] == name) & (usage_data["Status"] == "Used")].sort_values(by="Date")
+                rate = float(r_info["Sick_Rate"]) if float(r_info.get("Sick_Rate", 0)) > 0 else 40
+                tab1, tab2 = st.tabs(["🕒 Work Logs", "📅 Leave Usage"])
+                with tab1:
+                    rows = []; total_s = 0.0
+                    for _, log in emp_logs.iterrows():
+                        acc = round(log["Hours_Worked"] / rate, 2); total_s += acc
+                        rows.append({"From": log["Start_Date"], "To": log["End_Date"], "Hours": log["Hours_Worked"], "Accrued Sick": acc})
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+                with tab2:
+                    if not emp_usage.empty: st.dataframe(emp_usage[["Date", "Vacation_Used", "Sick_Used"]], use_container_width=True)
+                    else: st.info("No leave history.")
+                st.write(f"**Final Balance:** Vacation {r_info['Retained_Vacation']}h | Sick {r_info['Retained_Sick']}h")
+
+    st.markdown("---")
+    st.subheader("📧 Send Official Leave Summary Email")
+    full_list_names = []; combined_info = {}
+    for _, r in all_emp.iterrows():
+        label = f"{r['Name']} (Employed)"; full_list_names.append(label); combined_info[label] = r
+    if not rdf.empty:
+        for _, r in rdf.iterrows():
+            label = f"{r['Name']} (Resigned)"; full_list_names.append(label); combined_info[label] = r
+    if full_list_names:
+        with st.container(border=True):
+            e1, e2 = st.columns(2)
+            with e1:
+                sel_label = st.selectbox("Select Employee to Email", full_list_names); e_info = combined_info[sel_label]; sel_e_name = e_info["Name"]; target_email = st.text_input("Recipient Email", value=e_info["Email"])
+            with e2: dr = st.date_input("Report Period", value=(date(date.today().year, 1, 1), date.today()))
+            if len(dr) == 2:
+                logs = load_work_logs(); usage = load_leave_usage()
+                p_logs = logs[(logs["Employee"] == sel_e_name) & (logs["Start_Date"] >= dr[0]) & (logs["Start_Date"] <= dr[1])]
+                p_usage = usage[(usage["Employee"] == sel_e_name) & (pd.to_datetime(usage["Date"]).dt.date >= dr[0]) & (pd.to_datetime(usage["Date"]).dt.date <= dr[1]) & (usage["Status"] == "Used")]
+                tw_p = p_logs["Hours_Worked"].sum(); uv_p, us_p = p_usage["Vacation_Used"].sum(), p_usage["Sick_Used"].sum()
+                total_w = logs[logs["Employee"] == sel_e_name]["Hours_Worked"].sum()
+                rate = float(e_info["Sick_Rate"]) if float(e_info.get("Sick_Rate", 0)) > 0 else 40
+                ret_v = round(float(e_info["Vacation_Limit"]) - usage[(usage["Employee"] == sel_e_name) & (usage["Status"] == "Used")]["Vacation_Used"].sum(), 2)
+                ret_s = round((total_w / rate) - usage[(usage["Employee"] == sel_e_name) & (usage["Status"] == "Used")]["Sick_Used"].sum(), 2)
+                body_text = f"Dear {sel_e_name},\n\nOfficial summary from {dr[0]} to {dr[1]}:\n\n"
+                body_text += f"- Total Hours Worked: {tw_p:.2f} hrs\n"
+                if uv_p > 0: body_text += f"- Used Vacation: {uv_p:.2f} hrs\n"
+                if us_p > 0: body_text += f"- Used Sick leave: {us_p:.2f} hrs\n"
+                if not p_usage.empty:
+                    body_text += "\nLeave History Detail:\n"
+                    for _, row in p_usage.iterrows():
+                        h = row['Vacation_Used'] if row['Vacation_Used'] > 0 else row['Sick_Used']
+                        body_text += f"- {row['Date']} ({h:.2f} hrs)\n"
+                body_text += "\nCurrent Balance Status (As of today):\n"
+                if ret_v != 0: body_text += f"- Retained Vacation: {ret_v:.2f} hrs\n"
+                if ret_s != 0: body_text += f"- Retained Sick Leave: {ret_s:.2f} hrs\n"
+                if "(Resigned)" in sel_label:
+                    try:
+                        paid_val = float(e_info.get("Paid_Amount", 0))
+                        if paid_val > 0: body_text += f"\n[Settlement Info] ${paid_val:,.2f} was paid on {e_info.get('Paid_Date', 'N/A')}.\n"
+                    except: pass
+                body_text += "\nBest regards,\nAccounting Department\nAmlotus"
+                edit_subject = st.text_input("Subject", value=f"Leave Summary - {sel_e_name}")
+                edit_body = st.text_area("Content", value=body_text, height=350)
+                google_pw = st.text_input("Enter Google App Password", type="password")
+                if st.button("🚀 Send Email", type="primary", use_container_width=True, disabled=not is_admin()):
+                    if google_pw:
+                        html_c = edit_body.replace("\n", "<br>")
+                        if ret_v < 0: html_c = html_c.replace(f"Retained Vacation: {ret_v:.2f} hrs", f"<span style='color:red; font-weight:bold;'>Retained Vacation: {ret_v:.2f} hrs</span>")
+                        if ret_s < 0: html_c = html_c.replace(f"Retained Sick Leave: {ret_s:.2f} hrs", f"<span style='color:red; font-weight:bold;'>Retained Sick Leave: {ret_s:.2f} hrs</span>")
+                        try:
+                            msg = MIMEMultipart(); msg['From'] = "accounting@amlotus.edu"; msg['To'] = target_email
+                            msg['Subject'] = edit_subject; msg.attach(MIMEText(f"<html><body>{html_c}</body></html>", 'html'))
+                            server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls()
+                            server.login("accounting@amlotus.edu", google_pw); server.send_message(msg); server.quit()
+                            st.success("✅ Email sent!"); time.sleep(1)
+                        except Exception as e: st.error(f"❌ Error: {e}")
