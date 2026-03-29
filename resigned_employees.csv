@@ -1,2 +1,2 @@
-name,resigned_date,location,total_worked,retained_vacation,retained_sick,paid_date,paid_amount,email,type,vacation_limit,sick_rate,sick_max
+Name,Resigned_Date,Location,Total_Worked,Retained_Vacation,Retained_Sick,Paid_Date,Paid_Amount,Email,Type,Vacation_Limit,Sick_Rate,Sick_Max
 alam,2026-03-21,Amlotus - Flushing,130.0,-12.17,40.0,2026-03-21,500.0,sungik2255@gmail.com,Part-Time (with vacation),40.0,30,40

@@ -1,40 +1,40 @@
-employee,status,start_date,end_date,hours_worked
-Chelsea Marie Perez,02/01/2026,02/15/2026,03/18/1900,Employed
-Chelsea Marie Perez,02/16/2026,02/28/2026,03/11/1900,Employed
-Chelsea Marie Perez,03/01/2026,03/15/2026,03/29/1900,Employed
-Kayoko Tsujimoto ,03/01/2026,03/15/2026,03/20/1900,Employed
-Kayoko Tsujimoto ,01/01/2026,01/15/2026,02/29/1900,Employed
-Kayoko Tsujimoto ,02/01/2026,02/15/2026,03/20/1900,Employed
-Kayoko Tsujimoto ,02/16/2026,02/28/2026,03/20/1900,Employed
-Michelle Salgado,02/01/2026,02/15/2026,02/05/1900,Employed
-Michelle Salgado,02/16/2026,02/28/2026,01/27/1900,Employed
-Michelle Salgado,03/01/2026,03/15/2026,02/14/1900,Employed
-Mohamed Sabir,01/01/2026,01/15/2026,02/05/1900,Employed
-Mohamed Sabir,01/16/2026,01/31/2026,02/05/1900,Employed
-Mohamed Sabir,02/01/2026,02/15/2026,02/05/1900,Employed
-Mohamed Sabir,02/16/2026,02/28/2026,01/31/1900,Employed
-Yuanyuan Liu,03/01/2026,03/15/2026,03/20/1900,Employed
-Yuanyuan Liu,01/01/2026,01/15/2026,03/04/1900,Employed
-Yuanyuan Liu,01/16/2026,01/31/2026,03/20/1900,Employed
-Yuanyuan Liu,02/01/2026,02/15/2026,03/20/1900,Employed
-Yuanyuan Liu,02/16/2026,02/28/2026,03/20/1900,Employed
-Renlong Zhang,03/01/2026,03/15/2026,02/14/1900,Employed
-Renlong Zhang,01/01/2026,01/15/2026,02/05/1900,Employed
-Renlong Zhang,01/16/2026,01/31/2026,02/05/1900,Employed
-Renlong Zhang,02/01/2026,02/15/2026,02/05/1900,Employed
-Renlong Zhang,02/16/2026,02/28/2026,01/27/1900,Employed
-Isabella James,03/01/2026,03/15/2026,02/05/1900,Employed
-Isabella James,01/01/2026,01/15/2026,02/27/1900,Employed
-Isabella James,01/16/2026,01/31/2026,02/10/1900,Employed
-Isabella James,02/01/2026,02/15/2026,02/03/1900,Employed
-Isabella James,02/16/2026,02/28/2026,01/29/1900,Employed
-SHAHNOZA YUSUPOVA,03/01/2026,03/15/2026,02/14/1900,Employed
-SHAHNOZA YUSUPOVA,01/01/2026,01/15/2026,02/05/1900,Employed
-SHAHNOZA YUSUPOVA,01/16/2026,01/31/2026,01/27/1900,Employed
-SHAHNOZA YUSUPOVA,02/01/2026,02/15/2026,02/14/1900,Employed
-SHAHNOZA YUSUPOVA,02/16/2026,02/28/2026,01/27/1900,Employed
-Olga Prokoptseva,01/01/2026,01/15/2026,02/05/1900,Employed
-Olga Prokoptseva,01/16/2026,01/31/2026,02/05/1900,Employed
-Olga Prokoptseva,02/01/2026,02/15/2026,02/14/1900,Employed
-Olga Prokoptseva,02/16/2026,02/28/2026,01/27/1900,Employed
-Olga Prokoptseva,03/01/2026,03/15/2026,01/09/1900,Employed
+Employee,Start_Date,End_Date,Hours_Worked,Status
+Chelsea Marie Perez,2026-02-01,2026-02-15,77.0,Employed
+Chelsea Marie Perez,2026-02-16,2026-02-28,70.0,Employed
+Chelsea Marie Perez,2026-03-01,2026-03-15,88.0,Employed
+Kayoko Tsujimoto,2026-03-01,2026-03-15,79.0,Employed
+Kayoko Tsujimoto,2026-01-01,2026-01-15,60.0,Employed
+Kayoko Tsujimoto,2026-02-01,2026-02-15,79.0,Employed
+Kayoko Tsujimoto,2026-02-16,2026-02-28,79.0,Employed
+Michelle Salgado,2026-02-01,2026-02-15,36.0,Employed
+Michelle Salgado,2026-02-16,2026-02-28,27.0,Employed
+Michelle Salgado,2026-03-01,2026-03-15,45.0,Employed
+Mohamed Sabir,2026-01-01,2026-01-15,36.0,Employed
+Mohamed Sabir,2026-01-16,2026-01-31,36.0,Employed
+Mohamed Sabir,2026-02-01,2026-02-15,36.0,Employed
+Mohamed Sabir,2026-02-16,2026-02-28,31.0,Employed
+Yuanyuan Liu,2026-03-01,2026-03-15,79.0,Employed
+Yuanyuan Liu,2026-01-01,2026-01-15,63.0,Employed
+Yuanyuan Liu,2026-01-16,2026-01-31,79.0,Employed
+Yuanyuan Liu,2026-02-01,2026-02-15,79.0,Employed
+Yuanyuan Liu,2026-02-16,2026-02-28,79.0,Employed
+Renlong Zhang,2026-03-01,2026-03-15,45.0,Employed
+Renlong Zhang,2026-01-01,2026-01-15,36.0,Employed
+Renlong Zhang,2026-01-16,2026-01-31,36.0,Employed
+Renlong Zhang,2026-02-01,2026-02-15,36.0,Employed
+Renlong Zhang,2026-02-16,2026-02-28,27.0,Employed
+Isabella James,2026-03-01,2026-03-15,36.0,Employed
+Isabella James,2026-01-01,2026-01-15,58.0,Employed
+Isabella James,2026-01-16,2026-01-31,41.0,Employed
+Isabella James,2026-02-01,2026-02-15,34.0,Employed
+Isabella James,2026-02-16,2026-02-28,29.0,Employed
+SHAHNOZA YUSUPOVA,2026-03-01,2026-03-15,45.0,Employed
+SHAHNOZA YUSUPOVA,2026-01-01,2026-01-15,36.0,Employed
+SHAHNOZA YUSUPOVA,2026-01-16,2026-01-31,27.0,Employed
+SHAHNOZA YUSUPOVA,2026-02-01,2026-02-15,45.0,Employed
+SHAHNOZA YUSUPOVA,2026-02-16,2026-02-28,27.0,Employed
+Olga Prokoptseva,2026-01-01,2026-01-15,36.0,Employed
+Olga Prokoptseva,2026-01-16,2026-01-31,36.0,Employed
+Olga Prokoptseva,2026-02-01,2026-02-15,45.0,Employed
+Olga Prokoptseva,2026-02-16,2026-02-28,27.0,Employed
+Olga Prokoptseva,2026-03-01,2026-03-15,9.0,Employed
