@@ -307,6 +307,72 @@ elif menu == "2. Log Worked Hours":
                 if st.button("No", key="en_emp"): st.session_state.emp_del_conf = False; st.rerun()
 
     st.markdown("---")
+
+    # ── CSV 일괄 업로드 (NEW) ─────────────────────────────────
+    st.markdown("### 📤 Bulk Upload Work Hours (CSV)")
+    with st.expander("📋 CSV 일괄 업로드 — 180개도 한 번에!", expanded=False):
+        st.info("""
+**📌 CSV 형식 안내**
+- 필수 컬럼: `Employee`, `Start_Date`, `End_Date`, `Hours_Worked`
+- 날짜 형식: `2026-01-01`
+- 예시: `John Kim, 2026-01-01, 2026-01-15, 80.0`
+        """)
+
+        # 템플릿 다운로드
+        template_df = pd.DataFrame([
+            {"Employee": "John Kim",  "Start_Date": "2026-01-01", "End_Date": "2026-01-15", "Hours_Worked": 80.0},
+            {"Employee": "Jane Lee",  "Start_Date": "2026-01-01", "End_Date": "2026-01-15", "Hours_Worked": 72.0},
+            {"Employee": "Tom Park",  "Start_Date": "2026-01-16", "End_Date": "2026-01-31", "Hours_Worked": 68.0},
+        ])
+        st.download_button(
+            label="📥 Download Template CSV",
+            data=template_df.to_csv(index=False).encode('utf-8-sig'),
+            file_name="bulk_upload_template.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+
+        uploaded_csv = st.file_uploader("CSV 파일 선택", type=["csv"], key="bulk_csv")
+        if uploaded_csv and is_admin():
+            try:
+                udf = pd.read_csv(uploaded_csv)
+                required_cols = {"Employee", "Start_Date", "End_Date", "Hours_Worked"}
+                missing = required_cols - set(udf.columns)
+                if missing:
+                    st.error(f"❌ 필수 컬럼 없음: {missing}")
+                else:
+                    udf["Hours_Worked"] = pd.to_numeric(udf["Hours_Worked"], errors="coerce").fillna(0)
+                    udf["Status"] = "Employed"
+
+                    # 등록된 직원 검증
+                    valid_names = st.session_state.emp_df["Name"].tolist()
+                    udf["_valid"] = udf["Employee"].isin(valid_names)
+                    invalid_names = udf[~udf["_valid"]]["Employee"].unique().tolist()
+                    valid_udf = udf[udf["_valid"]].drop(columns=["_valid"]).reset_index(drop=True)
+
+                    col_info1, col_info2 = st.columns(2)
+                    with col_info1:
+                        st.success(f"✅ 유효한 레코드: **{len(valid_udf)}건**")
+                    with col_info2:
+                        if invalid_names:
+                            st.warning(f"⚠️ 미등록 직원 (제외됨): {', '.join(invalid_names)}")
+
+                    if not valid_udf.empty:
+                        st.dataframe(valid_udf[["Employee","Start_Date","End_Date","Hours_Worked"]], use_container_width=True, hide_index=True)
+
+                        if st.button("🚀 Bulk Save to Work Log", type="primary", use_container_width=True):
+                            existing = load_work_logs()
+                            to_add = valid_udf[["Employee","Status","Start_Date","End_Date","Hours_Worked"]]
+                            combined = pd.concat([existing.reset_index(drop=True), to_add], ignore_index=True)
+                            if write_sheet("work_log", combined):
+                                st.success(f"✅ {len(valid_udf)}건 저장 완료!"); time.sleep(1); st.rerun()
+            except Exception as e:
+                st.error(f"❌ CSV 읽기 오류: {e}")
+        elif uploaded_csv and not is_admin():
+            st.warning("⛔ Admin만 업로드할 수 있습니다.")
+
+    # ── 기존 로그 조회 ────────────────────────────────────────
+    st.markdown("---")
     st.session_state.log_df = load_work_logs()
     if not st.session_state.log_df.empty:
         with st.expander("🔍 Filter & Download Logs", expanded=True):
