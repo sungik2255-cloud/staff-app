@@ -57,11 +57,11 @@ def show_leave_modal(record):
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown(f"**👤 Employee**")
-        st.markdown(f"**📅 Date**")
-        st.markdown(f"**🗂️ Leave Type**")
-        st.markdown(f"**⏱️ Hours**")
-        st.markdown(f"**📊 Status**")
+        st.markdown("**👤 Employee**")
+        st.markdown("**📅 Date**")
+        st.markdown("**🗂️ Leave Type**")
+        st.markdown("**⏱️ Hours**")
+        st.markdown("**📊 Status**")
     with col2:
         st.markdown(emp)
         st.markdown(dt)
@@ -460,6 +460,7 @@ elif menu == "2. Log Worked Hours":
 elif menu == "3. Plan/Submit Leave":
     st.title("📅 Plan & Submit Leave")
 
+    # ── 팝업 트리거 ──────────────────────────────────────────
     if st.session_state.leave_modal_record is not None:
         show_leave_modal(st.session_state.leave_modal_record)
         st.session_state.leave_modal_record = None
@@ -472,35 +473,63 @@ elif menu == "3. Plan/Submit Leave":
     cal = calendar.monthcalendar(c_year, c_month)
     month_name_str = calendar.month_name[c_month]
 
-    st.markdown(f"<div style='text-align:center; font-weight:bold; font-size:24px; margin-bottom:10px;'>{month_name_str} {c_year}</div>", unsafe_allow_html=True)
+    # ── 캘린더 CSS ───────────────────────────────────────────
+    st.markdown("""
+    <style>
+    .cal-header-sun  { text-align:center; font-weight:bold; font-size:14px; background:#c0392b; color:white; padding:8px 4px; border-radius:4px; margin-bottom:4px; }
+    .cal-header-sat  { text-align:center; font-weight:bold; font-size:14px; background:#1a6fc4; color:white; padding:8px 4px; border-radius:4px; margin-bottom:4px; }
+    .cal-header-week { text-align:center; font-weight:bold; font-size:14px; background:#4a4a4a; color:white; padding:8px 4px; border-radius:4px; margin-bottom:4px; }
+    .cal-day-num-sun { font-weight:bold; font-size:15px; color:#c0392b; padding:2px 4px; }
+    .cal-day-num-sat { font-weight:bold; font-size:15px; color:#1a6fc4; padding:2px 4px; }
+    .cal-day-num     { font-weight:bold; font-size:15px; color:#333;    padding:2px 4px; }
+    .cal-empty { min-height:110px; border:1px solid #eee; background:#fafafa; border-radius:4px; }
+    </style>
+    """, unsafe_allow_html=True)
 
-    day_names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    # ── 월 제목 ──────────────────────────────────────────────
+    st.markdown(f"<div style='text-align:center; font-weight:bold; font-size:24px; margin:8px 0 12px 0;'>{month_name_str} {c_year}</div>", unsafe_allow_html=True)
+
+    # ── 요일 헤더 ────────────────────────────────────────────
     hcols = st.columns(7)
+    day_names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     for i, d in enumerate(day_names):
-        hcols[i].markdown(f"<div style='text-align:center; font-weight:bold; background:#f4f4f4; padding:6px; border:1px solid #ddd; border-radius:4px;'>{d}</div>", unsafe_allow_html=True)
+        if i == 0:   css = "cal-header-sun"
+        elif i == 6: css = "cal-header-sat"
+        else:        css = "cal-header-week"
+        hcols[i].markdown(f"<div class='{css}'>{d}</div>", unsafe_allow_html=True)
 
+    # ── 주별 렌더링 ──────────────────────────────────────────
     for week in cal:
         wcols = st.columns(7)
         for i, day in enumerate(week):
             with wcols[i]:
                 if day == 0:
-                    st.markdown("<div style='min-height:90px; border:1px solid #eee; background:#fafafa; border-radius:4px;'></div>", unsafe_allow_html=True)
+                    st.markdown("<div class='cal-empty'></div>", unsafe_allow_html=True)
                 else:
                     curr_date_str = f"{c_year}-{c_month:02d}-{day:02d}"
                     day_data = cu[cu["Date"] == curr_date_str] if "Date" in cu.columns else pd.DataFrame()
-                    st.markdown(f"<div style='font-weight:bold; font-size:15px; padding:2px 4px;'>{day}</div>", unsafe_allow_html=True)
+
+                    if i == 0:   num_css = "cal-day-num-sun"
+                    elif i == 6: num_css = "cal-day-num-sat"
+                    else:        num_css = "cal-day-num"
+
+                    st.markdown(f"<div class='{num_css}'>{day}</div>", unsafe_allow_html=True)
+
                     for idx, row in day_data.iterrows():
                         vac_h  = float(row["Vacation_Used"])
                         sick_h = float(row["Sick_Used"])
                         hrs    = vac_h if vac_h > 0 else sick_h
                         s_char = "P" if row["Status"] == "Plan" else "U"
-                        btn_label = f"{row['Employee']} ({s_char}, {hrs}h)"
+                        # 🔵 Plan(파랑) / 🟢 Used(초록)
+                        dot = "🔵" if row["Status"] == "Plan" else "🟢"
+                        btn_label = f"{dot} {row['Employee']} ({s_char}, {hrs}h)"
                         if st.button(btn_label, key=f"badge_{c_year}_{c_month}_{day}_{idx}", use_container_width=True, help="클릭하면 상세 정보를 볼 수 있습니다"):
                             st.session_state.leave_modal_record = row.to_dict()
                             st.rerun()
 
     st.markdown("---")
 
+    # ── Leave 입력 폼 ─────────────────────────────────────────
     with st.container(border=True):
         i1, i2, i3, i4, i5 = st.columns(5)
         emp_list = ce["Name"].tolist() if not ce.empty else ["No employees"]
