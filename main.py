@@ -54,7 +54,6 @@ def show_leave_modal(record):
     hours      = vac if vac > 0 else sick
     status     = record.get("Status", "")
     status_icon = "✅ Used" if status == "Used" else "📌 Plan"
-
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**👤 Employee**")
@@ -68,7 +67,6 @@ def show_leave_modal(record):
         st.markdown(leave_type)
         st.markdown(f"{hours}h")
         st.markdown(status_icon)
-
     st.divider()
     st.caption("📋 Copy용 텍스트 (Ctrl+A → Ctrl+C)")
     copy_text = f"Employee: {emp}\nDate: {dt}\nLeave Type: {leave_type.split(' ')[-1]}\nHours: {hours}h\nStatus: {status}"
@@ -81,13 +79,11 @@ def check_login():
         st.session_state.logged_in = False
         st.session_state.role = None
         st.session_state.username = None
-
     if not st.session_state.logged_in:
         if params.get("auth") == "ok" and params.get("role") and params.get("user"):
             st.session_state.logged_in = True
             st.session_state.role = params.get("role")
             st.session_state.username = params.get("user")
-
     if not st.session_state.logged_in:
         col1, col2, col3 = st.columns([1, 1.2, 1])
         with col2:
@@ -107,7 +103,6 @@ def check_login():
                     except:
                         admin_user, admin_pw   = "admin", "admin123"
                         viewer_user, viewer_pw = "viewer", "viewer123"
-
                     if username == admin_user and password == admin_pw:
                         st.session_state.logged_in = True
                         st.session_state.role = "admin"
@@ -207,12 +202,25 @@ if "log_df"   not in st.session_state: st.session_state.log_df   = load_work_log
 if "leave_df" not in st.session_state: st.session_state.leave_df = load_leave_usage()
 if "leave_modal_record" not in st.session_state: st.session_state.leave_modal_record = None
 
-# ── 8. Sidebar Menu ───────────────────────────────────────────
+# ── 8. Sidebar Menu — 새로고침 후 페이지 유지 ─────────────────
+menu_options_admin  = ["1. Employee Setup", "2. Log Worked Hours", "3. Plan/Submit Leave", "4. Dashboard & Email"]
+menu_options_viewer = ["2. Log Worked Hours", "3. Plan/Submit Leave", "4. Dashboard & Email"]
+
 if is_admin():
-    menu = st.sidebar.radio("Go to", ["1. Employee Setup", "2. Log Worked Hours", "3. Plan/Submit Leave", "4. Dashboard & Email"])
+    menu_options = menu_options_admin
 else:
     st.sidebar.info("👁️ View-only mode")
-    menu = st.sidebar.radio("Go to", ["2. Log Worked Hours", "3. Plan/Submit Leave", "4. Dashboard & Email"])
+    menu_options = menu_options_viewer
+
+saved_menu = st.query_params.get("menu", menu_options[0])
+if saved_menu not in menu_options:
+    saved_menu = menu_options[0]
+default_idx = menu_options.index(saved_menu)
+
+menu = st.sidebar.radio("Go to", menu_options, index=default_idx)
+
+if st.query_params.get("menu") != menu:
+    st.query_params["menu"] = menu
 
 # ═══════════════════════════════════════════════════════════════
 # 1. Employee Setup
@@ -289,7 +297,6 @@ elif menu == "2. Log Worked Hours":
     if not ce.empty:
         idat = pd.DataFrame({"Select": [False]*len(ce), "Employee Name": ce["Name"].values, "Email": ce["Email"].values, "Employee Status": ["Employed"]*len(ce), "Hours Worked": [0.0]*len(ce)})
         ed_in = st.data_editor(idat, column_config={"Select": st.column_config.CheckboxColumn("Select"), "Employee Status": st.column_config.SelectboxColumn(options=["Employed", "Resigned"], required=True)}, use_container_width=True, height=400, key="win_ed", disabled=not is_admin())
-
         if not is_admin():
             st.info("👁️ View-only mode: saving is disabled.")
         c1, c2 = st.columns(2)
@@ -334,7 +341,6 @@ elif menu == "2. Log Worked Hours":
                 if st.button("No", key="en_emp"): st.session_state.emp_del_conf = False; st.rerun()
 
     st.markdown("---")
-
     st.markdown("### 📤 Bulk Upload Work Hours (CSV)")
     with st.expander("📋 CSV 일괄 업로드 — 180개도 한 번에!", expanded=False):
         st.info("""
@@ -349,7 +355,6 @@ elif menu == "2. Log Worked Hours":
             {"Employee": "Tom Park",  "Start_Date": "01/16/2026", "End_Date": "01/31/2026", "Hours_Worked": 68.0},
         ])
         st.download_button(label="📥 Download Template CSV", data=template_df.to_csv(index=False).encode("utf-8-sig"), file_name="bulk_upload_template.csv", mime="text/csv", use_container_width=True)
-
         uploaded_csv = st.file_uploader("CSV 파일 선택", type=["csv"], key="bulk_csv")
         if uploaded_csv and is_admin():
             try:
@@ -422,7 +427,8 @@ elif menu == "2. Log Worked Hours":
             if not fdf.empty:
                 st.download_button(label="📥 Download Logs", data=fdf.reset_index(drop=True).to_csv(index=False).encode("utf-8-sig"), file_name="WorkLog.csv", mime="text/csv")
 
-        ldat = fdf.sort_values("Employee").reset_index(drop=True).copy()
+        # ✅ 수정1: Employee 알파벳순 → Start_Date 오름차순 정렬
+        ldat = fdf.sort_values(["Employee", "Start_Date"]).reset_index(drop=True).copy()
         ldat.insert(0, "No.", range(1, len(ldat) + 1))
         ldat.insert(1, "Select", False)
         ed_l = st.data_editor(ldat, use_container_width=True, key="led", hide_index=True)
@@ -460,7 +466,6 @@ elif menu == "2. Log Worked Hours":
 elif menu == "3. Plan/Submit Leave":
     st.title("📅 Plan & Submit Leave")
 
-    # ── 팝업 트리거 ──────────────────────────────────────────
     if st.session_state.leave_modal_record is not None:
         show_leave_modal(st.session_state.leave_modal_record)
         st.session_state.leave_modal_record = None
@@ -473,7 +478,6 @@ elif menu == "3. Plan/Submit Leave":
     cal = calendar.monthcalendar(c_year, c_month)
     month_name_str = calendar.month_name[c_month]
 
-    # ── 캘린더 CSS ───────────────────────────────────────────
     st.markdown("""
     <style>
     .cal-header-sun  { text-align:center; font-weight:bold; font-size:14px; background:#c0392b; color:white; padding:8px 4px; border-radius:4px; margin-bottom:4px; }
@@ -486,10 +490,8 @@ elif menu == "3. Plan/Submit Leave":
     </style>
     """, unsafe_allow_html=True)
 
-    # ── 월 제목 ──────────────────────────────────────────────
     st.markdown(f"<div style='text-align:center; font-weight:bold; font-size:24px; margin:8px 0 12px 0;'>{month_name_str} {c_year}</div>", unsafe_allow_html=True)
 
-    # ── 요일 헤더 ────────────────────────────────────────────
     hcols = st.columns(7)
     day_names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     for i, d in enumerate(day_names):
@@ -498,7 +500,6 @@ elif menu == "3. Plan/Submit Leave":
         else:        css = "cal-header-week"
         hcols[i].markdown(f"<div class='{css}'>{d}</div>", unsafe_allow_html=True)
 
-    # ── 주별 렌더링 ──────────────────────────────────────────
     for week in cal:
         wcols = st.columns(7)
         for i, day in enumerate(week):
@@ -508,19 +509,15 @@ elif menu == "3. Plan/Submit Leave":
                 else:
                     curr_date_str = f"{c_year}-{c_month:02d}-{day:02d}"
                     day_data = cu[cu["Date"] == curr_date_str] if "Date" in cu.columns else pd.DataFrame()
-
                     if i == 0:   num_css = "cal-day-num-sun"
                     elif i == 6: num_css = "cal-day-num-sat"
                     else:        num_css = "cal-day-num"
-
                     st.markdown(f"<div class='{num_css}'>{day}</div>", unsafe_allow_html=True)
-
                     for idx, row in day_data.iterrows():
                         vac_h  = float(row["Vacation_Used"])
                         sick_h = float(row["Sick_Used"])
                         hrs    = vac_h if vac_h > 0 else sick_h
                         s_char = "P" if row["Status"] == "Plan" else "U"
-                        # 🔵 Plan(파랑) / 🟢 Used(초록)
                         dot = "🔵" if row["Status"] == "Plan" else "🟢"
                         btn_label = f"{dot} {row['Employee']} ({s_char}, {hrs}h)"
                         if st.button(btn_label, key=f"badge_{c_year}_{c_month}_{day}_{idx}", use_container_width=True, help="클릭하면 상세 정보를 볼 수 있습니다"):
@@ -529,7 +526,6 @@ elif menu == "3. Plan/Submit Leave":
 
     st.markdown("---")
 
-    # ── Leave 입력 폼 ─────────────────────────────────────────
     with st.container(border=True):
         i1, i2, i3, i4, i5 = st.columns(5)
         emp_list = ce["Name"].tolist() if not ce.empty else ["No employees"]
@@ -569,8 +565,10 @@ elif menu == "3. Plan/Submit Leave":
         with col_b2:
             if st.button("🗑️ Delete Selected Employees", use_container_width=True, disabled=not is_admin()):
                 if edited_summ["Select"].any():
-                    emp_data = load_employees(); names = edited_summ[edited_summ["Select"] == True]["Name"].tolist()
-                    if upsert_table("employees", emp_data[~emp_data["Name"].isin(names)]):
+                    names = edited_summ[edited_summ["Select"] == True]["Name"].tolist()
+                    emp_data = load_employees()
+                    # ✅ 수정2: employees만 삭제 — leave_usage, work_log는 유지
+                    if upsert_table("employees", emp_data[~emp_data["Name"].isin(names)].reset_index(drop=True)):
                         st.success("✅ Saved!"); time.sleep(1); st.rerun()
 
     with st.expander("📥 Download & Manage Usage/Plan Logs"):
