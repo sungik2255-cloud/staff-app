@@ -62,11 +62,21 @@ def write_sheet(sheet_name, df):
         return False
 
 # ── 3. Login System ───────────────────────────────────────────
+# [BUG FIX 2] 새로고침 시 로그아웃 문제: query_params로 세션 유지
 def check_login():
+    # query_params에서 세션 복원
+    params = st.query_params
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
         st.session_state.role = None
         st.session_state.username = None
+
+    # query_params에 로그인 정보가 있으면 복원
+    if not st.session_state.logged_in:
+        if params.get("auth") == "ok" and params.get("role") and params.get("user"):
+            st.session_state.logged_in = True
+            st.session_state.role = params.get("role")
+            st.session_state.username = params.get("user")
 
     if not st.session_state.logged_in:
         col1, col2, col3 = st.columns([1, 1.2, 1])
@@ -92,11 +102,19 @@ def check_login():
                         st.session_state.logged_in = True
                         st.session_state.role = "admin"
                         st.session_state.username = username
+                        # query_params에 저장
+                        st.query_params["auth"] = "ok"
+                        st.query_params["role"] = "admin"
+                        st.query_params["user"] = username
                         st.rerun()
                     elif username == viewer_user and password == viewer_pw:
                         st.session_state.logged_in = True
                         st.session_state.role = "viewer"
                         st.session_state.username = username
+                        # query_params에 저장
+                        st.query_params["auth"] = "ok"
+                        st.query_params["role"] = "viewer"
+                        st.query_params["user"] = username
                         st.rerun()
                     else:
                         st.error("❌ Incorrect username or password.")
@@ -110,6 +128,8 @@ def show_sidebar_user():
         st.session_state.logged_in = False
         st.session_state.role = None
         st.session_state.username = None
+        # query_params 초기화
+        st.query_params.clear()
         st.rerun()
 
 def is_admin():
@@ -308,7 +328,7 @@ elif menu == "2. Log Worked Hours":
 
     st.markdown("---")
 
-    # ── CSV 일괄 업로드 (NEW) ─────────────────────────────────
+    # ── CSV 일괄 업로드 ───────────────────────────────────────
     st.markdown("### 📤 Bulk Upload Work Hours (CSV)")
     with st.expander("📋 CSV 일괄 업로드 — 180개도 한 번에!", expanded=False):
         st.info("""
@@ -318,7 +338,6 @@ elif menu == "2. Log Worked Hours":
 - 예시: `John Kim, 2026-01-01, 2026-01-15, 80.0`
         """)
 
-        # 템플릿 다운로드
         template_df = pd.DataFrame([
             {"Employee": "John Kim",  "Start_Date": "2026-01-01", "End_Date": "2026-01-15", "Hours_Worked": 80.0},
             {"Employee": "Jane Lee",  "Start_Date": "2026-01-01", "End_Date": "2026-01-15", "Hours_Worked": 72.0},
@@ -344,7 +363,6 @@ elif menu == "2. Log Worked Hours":
                     udf["Hours_Worked"] = pd.to_numeric(udf["Hours_Worked"], errors="coerce").fillna(0)
                     udf["Status"] = "Employed"
 
-                    # 등록된 직원 검증
                     valid_names = st.session_state.emp_df["Name"].tolist()
                     udf["_valid"] = udf["Employee"].isin(valid_names)
                     invalid_names = udf[~udf["_valid"]]["Employee"].unique().tolist()
@@ -365,7 +383,17 @@ elif menu == "2. Log Worked Hours":
                             to_add = valid_udf[["Employee","Status","Start_Date","End_Date","Hours_Worked"]]
                             combined = pd.concat([existing.reset_index(drop=True), to_add], ignore_index=True)
                             if write_sheet("work_log", combined):
-                                st.success(f"✅ {len(valid_udf)}건 저장 완료!"); time.sleep(1); st.rerun()
+                                # [BUG FIX 1] 저장 후 업로드한 기간으로 filter 자동 세팅
+                                try:
+                                    first_start = pd.to_datetime(valid_udf["Start_Date"].iloc[0]).date()
+                                    first_end = pd.to_datetime(valid_udf["End_Date"].iloc[0]).date()
+                                    st.session_state["bulk_uploaded"] = True
+                                    st.session_state["bulk_period"] = (first_start, first_end)
+                                except:
+                                    pass
+                                st.success(f"✅ {len(valid_udf)}건 저장 완료!")
+                                time.sleep(1)
+                                st.rerun()
             except Exception as e:
                 st.error(f"❌ CSV 읽기 오류: {e}")
         elif uploaded_csv and not is_admin():
@@ -374,6 +402,14 @@ elif menu == "2. Log Worked Hours":
     # ── 기존 로그 조회 ────────────────────────────────────────
     st.markdown("---")
     st.session_state.log_df = load_work_logs()
+
+    # [BUG FIX 1] bulk upload 직후엔 해당 기간으로 자동 필터
+    if st.session_state.get("bulk_uploaded") and st.session_state.get("bulk_period"):
+        default_period = st.session_state["bulk_period"]
+        st.session_state["bulk_uploaded"] = False  # 한 번만 적용
+    else:
+        default_period = (date.today(), date.today())
+
     if not st.session_state.log_df.empty:
         with st.expander("🔍 Filter & Download Logs", expanded=True):
             st.info(f"🏢 Company: **{sc}**  |  📅 Period: **{dr[0] if isinstance(dr,(list,tuple)) and len(dr)==2 else ''}** ~ **{dr[1] if isinstance(dr,(list,tuple)) and len(dr)==2 else ''}**")
