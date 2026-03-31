@@ -31,11 +31,13 @@ def read_table(table_name):
 def upsert_table(table_name, df):
     try:
         sb = get_supabase()
-        # 기존 데이터 전체 삭제 후 재삽입
         sb.table(table_name).delete().neq("id", 0).execute()
         if not df.empty:
-            # id 컬럼 제거 후 삽입 (자동 생성)
-            data = df.drop(columns=["id"], errors="ignore").fillna("").to_dict(orient="records")
+            # date 타입 → 문자열 변환 (JSON serializable)
+            df2 = df.drop(columns=["id"], errors="ignore").copy()
+            for col in df2.columns:
+                df2[col] = df2[col].apply(lambda x: x.isoformat() if hasattr(x, 'isoformat') else x)
+            data = df2.fillna("").to_dict(orient="records")
             sb.table(table_name).insert(data).execute()
         return True
     except Exception as e:
@@ -133,8 +135,9 @@ def load_employees():
     df = read_table("employees")
     if df.empty:
         return pd.DataFrame(columns=["Name","Email","Location","Type","Vacation_Limit","Sick_Rate","Sick_Max"])
-    df = df.drop_duplicates().reset_index(drop=True)
+    df = df.drop_duplicates()
     df["Email"] = df["Email"].astype(str).replace("nan", "")
+    df = df.sort_values("Name", ascending=True).reset_index(drop=True)
     return df
 
 def load_work_logs():
