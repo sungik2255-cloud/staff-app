@@ -343,20 +343,32 @@ elif menu == "2. Log Worked Hours":
                     with col_info2:
                         if invalid_names: st.warning(f"⚠️ 미등록 직원 (제외됨): {', '.join(invalid_names)}")
                     if not valid_udf.empty:
+                        # 알파벳 정렬
+                        valid_udf = valid_udf.sort_values("Employee").reset_index(drop=True)
                         st.dataframe(valid_udf[["Employee","Start_Date","End_Date","Hours_Worked"]], use_container_width=True, hide_index=True)
+                        # 중복저장 방지: 이미 저장된 기간+직원 체크
                         if st.button("🚀 Bulk Save to Work Log", type="primary", use_container_width=True):
                             existing = load_work_logs()
-                            to_add = valid_udf[["Employee","Status","Start_Date","End_Date","Hours_Worked"]]
-                            combined = pd.concat([existing, to_add], ignore_index=True)
-                            if upsert_table("work_log", combined):
-                                try:
-                                    first_start = pd.to_datetime(valid_udf["Start_Date"].iloc[0]).date()
-                                    first_end   = pd.to_datetime(valid_udf["End_Date"].iloc[0]).date()
-                                    st.session_state["bulk_uploaded"] = True
-                                    st.session_state["bulk_period"]   = (first_start, first_end)
-                                except: pass
-                                st.success(f"✅ {len(valid_udf)}건 저장 완료!")
-                                time.sleep(1); st.rerun()
+                            # 이미 같은 기간에 저장된 직원 제외
+                            if not existing.empty:
+                                existing_keys = set(zip(existing["Employee"].astype(str), existing["Start_Date"].astype(str)))
+                                to_add = valid_udf[~valid_udf.apply(lambda r: (r["Employee"], r["Start_Date"]) in existing_keys, axis=1)]
+                            else:
+                                to_add = valid_udf.copy()
+                            to_add = to_add[["Employee","Status","Start_Date","End_Date","Hours_Worked"]]
+                            if to_add.empty:
+                                st.warning("⚠️ 이미 동일한 기간의 데이터가 저장되어 있습니다.")
+                            else:
+                                combined = pd.concat([existing, to_add], ignore_index=True)
+                                if upsert_table("work_log", combined):
+                                    try:
+                                        first_start = pd.to_datetime(valid_udf["Start_Date"].iloc[0]).date()
+                                        first_end   = pd.to_datetime(valid_udf["End_Date"].iloc[0]).date()
+                                        st.session_state["bulk_uploaded"] = True
+                                        st.session_state["bulk_period"]   = (first_start, first_end)
+                                    except: pass
+                                    st.success(f"✅ {len(to_add)}건 저장 완료!")
+                                    time.sleep(1); st.rerun()
             except Exception as e:
                 st.error(f"❌ CSV 읽기 오류: {e}")
         elif uploaded_csv and not is_admin():
@@ -385,7 +397,7 @@ elif menu == "2. Log Worked Hours":
             if not fdf.empty:
                 st.download_button(label="📥 Download Logs", data=fdf.reset_index(drop=True).to_csv(index=False).encode("utf-8-sig"), file_name="WorkLog.csv", mime="text/csv")
 
-        ldat = fdf.reset_index(drop=True).copy()
+        ldat = fdf.sort_values("Employee").reset_index(drop=True).copy()
         ldat.insert(0, "No.", range(1, len(ldat) + 1))
         ldat.insert(1, "Select", False)
         ed_l = st.data_editor(ldat, use_container_width=True, key="led", hide_index=True)
