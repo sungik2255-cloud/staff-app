@@ -314,9 +314,9 @@ elif menu == "2. Log Worked Hours":
 - 예시: `John Kim, 2026-01-01, 2026-01-15, 80.0`
         """)
         template_df = pd.DataFrame([
-            {"Employee": "John Kim",  "Start_Date": "2026-01-01", "End_Date": "2026-01-15", "Hours_Worked": 80.0},
-            {"Employee": "Jane Lee",  "Start_Date": "2026-01-01", "End_Date": "2026-01-15", "Hours_Worked": 72.0},
-            {"Employee": "Tom Park",  "Start_Date": "2026-01-16", "End_Date": "2026-01-31", "Hours_Worked": 68.0},
+            {"Employee": "John Kim",  "Start_Date": "01/01/2026", "End_Date": "01/15/2026", "Hours_Worked": 80.0},
+            {"Employee": "Jane Lee",  "Start_Date": "01/01/2026", "End_Date": "01/15/2026", "Hours_Worked": 72.0},
+            {"Employee": "Tom Park",  "Start_Date": "01/16/2026", "End_Date": "01/31/2026", "Hours_Worked": 68.0},
         ])
         st.download_button(label="📥 Download Template CSV", data=template_df.to_csv(index=False).encode("utf-8-sig"), file_name="bulk_upload_template.csv", mime="text/csv", use_container_width=True)
 
@@ -329,6 +329,9 @@ elif menu == "2. Log Worked Hours":
                 if missing:
                     st.error(f"❌ 필수 컬럼 없음: {missing}")
                 else:
+                    # MM/DD/YYYY 및 YYYY-MM-DD 모두 지원
+                    udf["Start_Date"] = pd.to_datetime(udf["Start_Date"], infer_datetime_format=True).dt.strftime("%Y-%m-%d")
+                    udf["End_Date"]   = pd.to_datetime(udf["End_Date"],   infer_datetime_format=True).dt.strftime("%Y-%m-%d")
                     udf["Hours_Worked"] = pd.to_numeric(udf["Hours_Worked"], errors="coerce").fillna(0)
                     udf["Status"] = "Employed"
                     valid_names = st.session_state.emp_df["Name"].tolist()
