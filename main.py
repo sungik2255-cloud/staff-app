@@ -1,77 +1,55 @@
 import streamlit as st
 import pandas as pd
-import os
 import time
-import json
 from datetime import date, datetime
 import calendar
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import gspread
-from google.oauth2.service_account import Credentials
+from supabase import create_client, Client
 
 # ── 1. Page Config ────────────────────────────────────────────
 st.set_page_config(page_title="Staff Leave Management", layout="wide")
 
-SPREADSHEET_ID = "1rOOxgp-aOAKy4XM1gk4sT81Mt19IdkT1EQKAFbT_zt4"
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-
-# ── 2. Google Sheets 연결 ─────────────────────────────────────
+# ── 2. Supabase 연결 ──────────────────────────────────────────
 @st.cache_resource
-def get_gspread_client():
-    try:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-        return gspread.authorize(creds)
-    except Exception as e:
-        st.error(f"❌ Google Sheets 연결 실패: {e}")
-        return None
+def get_supabase() -> Client:
+    url  = st.secrets["SUPABASE_URL"]
+    key  = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
-def get_sheet(sheet_name):
-    client = get_gspread_client()
-    if client is None:
-        return None
+def read_table(table_name):
     try:
-        sh = client.open_by_key(SPREADSHEET_ID)
-        return sh.worksheet(sheet_name)
+        sb = get_supabase()
+        res = sb.table(table_name).select("*").execute()
+        df = pd.DataFrame(res.data)
+        return df
     except Exception as e:
-        st.error(f"❌ 시트 '{sheet_name}' 접근 실패: {e}")
-        return None
-
-def read_sheet(sheet_name):
-    ws = get_sheet(sheet_name)
-    if ws is None:
-        return pd.DataFrame()
-    try:
-        data = ws.get_all_records()
-        return pd.DataFrame(data)
-    except:
+        st.error(f"❌ 시트 '{table_name}' 접근 실패: {e}")
         return pd.DataFrame()
 
-def write_sheet(sheet_name, df):
-    ws = get_sheet(sheet_name)
-    if ws is None:
-        return False
+def upsert_table(table_name, df):
     try:
-        ws.clear()
-        ws.update([df.columns.tolist()] + df.fillna("").astype(str).values.tolist())
+        sb = get_supabase()
+        # 기존 데이터 전체 삭제 후 재삽입
+        sb.table(table_name).delete().neq("id", 0).execute()
+        if not df.empty:
+            # id 컬럼 제거 후 삽입 (자동 생성)
+            data = df.drop(columns=["id"], errors="ignore").fillna("").to_dict(orient="records")
+            sb.table(table_name).insert(data).execute()
         return True
     except Exception as e:
         st.error(f"❌ 저장 실패: {e}")
         return False
 
 # ── 3. Login System ───────────────────────────────────────────
-# [BUG FIX 2] 새로고침 시 로그아웃 문제: query_params로 세션 유지
 def check_login():
-    # query_params에서 세션 복원
     params = st.query_params
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
         st.session_state.role = None
         st.session_state.username = None
 
-    # query_params에 로그인 정보가 있으면 복원
     if not st.session_state.logged_in:
         if params.get("auth") == "ok" and params.get("role") and params.get("user"):
             st.session_state.logged_in = True
@@ -102,7 +80,6 @@ def check_login():
                         st.session_state.logged_in = True
                         st.session_state.role = "admin"
                         st.session_state.username = username
-                        # query_params에 저장
                         st.query_params["auth"] = "ok"
                         st.query_params["role"] = "admin"
                         st.query_params["user"] = username
@@ -111,7 +88,6 @@ def check_login():
                         st.session_state.logged_in = True
                         st.session_state.role = "viewer"
                         st.session_state.username = username
-                        # query_params에 저장
                         st.query_params["auth"] = "ok"
                         st.query_params["role"] = "viewer"
                         st.query_params["user"] = username
@@ -128,7 +104,6 @@ def show_sidebar_user():
         st.session_state.logged_in = False
         st.session_state.role = None
         st.session_state.username = None
-        # query_params 초기화
         st.query_params.clear()
         st.rerun()
 
@@ -140,66 +115,63 @@ show_sidebar_user()
 
 # ── 4. Smart Rules Database ───────────────────────────────────
 SICK_LEAVE_RULES = {
-    "Manhattan":     {"text": "⚖️ **NYC Law**: 1 hour for every 30 hours worked (Up to 40-56h/yr).", "rate": 30, "max": 40},
-    "Flushing":      {"text": "⚖️ **NYC Law**: 1 hour for every 30 hours worked (Up to 40-56h/yr).", "rate": 30, "max": 40},
-    "Philadelphia":  {"text": "⚖️ **Philadelphia Law**: 1 hour for every 40 hours worked (Up to 40h/yr).", "rate": 40, "max": 40},
-    "Orlando":       {"text": "⚠️ **Florida Law**: No state-mandated paid sick leave. You can set custom rates below.", "rate": None, "max": None},
+    "Manhattan":    {"text": "⚖️ **NYC Law**: 1 hour for every 30 hours worked (Up to 40-56h/yr).", "rate": 30, "max": 40},
+    "Flushing":     {"text": "⚖️ **NYC Law**: 1 hour for every 30 hours worked (Up to 40-56h/yr).", "rate": 30, "max": 40},
+    "Philadelphia": {"text": "⚖️ **Philadelphia Law**: 1 hour for every 40 hours worked (Up to 40h/yr).", "rate": 40, "max": 40},
+    "Orlando":      {"text": "⚠️ **Florida Law**: No state-mandated paid sick leave.", "rate": None, "max": None},
 }
 
 # ── 5. Data Loading Functions ─────────────────────────────────
 def load_locations():
-    df = read_sheet("locations")
+    df = read_table("locations")
     if df.empty:
-        return pd.DataFrame([{"company_name": "Amlotus", "city_name": "Manhattan"}], index=[1])
-    df = df.dropna(subset=['company_name', 'city_name']).reset_index(drop=True)
-    df.index = df.index + 1
+        return pd.DataFrame([{"company_name": "Amlotus", "city_name": "Manhattan"}])
+    df = df.dropna(subset=["company_name", "city_name"]).reset_index(drop=True)
     return df
 
 def load_employees():
-    df = read_sheet("employees")
+    df = read_table("employees")
     if df.empty:
         return pd.DataFrame(columns=["Name","Email","Location","Type","Vacation_Limit","Sick_Rate","Sick_Max"])
     df = df.drop_duplicates().reset_index(drop=True)
-    df['Email'] = df['Email'].astype(str).replace("nan", "")
-    df.index = df.index + 1
+    df["Email"] = df["Email"].astype(str).replace("nan", "")
     return df
 
 def load_work_logs():
-    df = read_sheet("work_log")
+    df = read_table("work_log")
     if df.empty:
         return pd.DataFrame(columns=["Employee","Status","Start_Date","End_Date","Hours_Worked"])
     if "Status" not in df.columns: df["Status"] = "Employed"
-    df['Start_Date'] = pd.to_datetime(df['Start_Date'], errors='coerce').dt.date
-    df['End_Date'] = pd.to_datetime(df['End_Date'], errors='coerce').dt.date
-    df['Hours_Worked'] = pd.to_numeric(df['Hours_Worked'], errors='coerce').fillna(0)
-    df = df.reset_index(drop=True); df.index = df.index + 1
-    return df
+    df["Start_Date"] = pd.to_datetime(df["Start_Date"], errors="coerce").dt.date
+    df["End_Date"]   = pd.to_datetime(df["End_Date"],   errors="coerce").dt.date
+    df["Hours_Worked"] = pd.to_numeric(df["Hours_Worked"], errors="coerce").fillna(0)
+    return df.reset_index(drop=True)
 
 def load_resigned():
     cols = ["Name","Resigned_Date","Location","Total_Worked","Retained_Vacation","Retained_Sick","Paid_Date","Paid_Amount","Email","Type","Vacation_Limit","Sick_Rate","Sick_Max"]
-    df = read_sheet("resigned_employees")
+    df = read_table("resigned_employees")
     if df.empty:
         return pd.DataFrame(columns=cols)
     for c in cols:
         if c not in df.columns:
             df[c] = "" if any(x in c for x in ["Email","Type","Location","Name"]) else 0.0
-    df['Email'] = df['Email'].astype(str).replace("nan", "")
+    df["Email"] = df["Email"].astype(str).replace("nan", "")
     return df
 
 def load_leave_usage():
-    df = read_sheet("leave_usage")
+    df = read_table("leave_usage")
     if df.empty:
         return pd.DataFrame(columns=["Employee","Date","Vacation_Used","Sick_Used","Note","Status"])
     if "Status" not in df.columns: df["Status"] = "Used"
-    df['Vacation_Used'] = pd.to_numeric(df['Vacation_Used'], errors='coerce').fillna(0)
-    df['Sick_Used'] = pd.to_numeric(df['Sick_Used'], errors='coerce').fillna(0)
+    df["Vacation_Used"] = pd.to_numeric(df["Vacation_Used"], errors="coerce").fillna(0)
+    df["Sick_Used"]     = pd.to_numeric(df["Sick_Used"],     errors="coerce").fillna(0)
     return df
 
 # ── 6. Session Initializer ────────────────────────────────────
-if 'city_df' not in st.session_state: st.session_state.city_df = load_locations()
-if 'emp_df' not in st.session_state: st.session_state.emp_df = load_employees()
-if 'log_df' not in st.session_state: st.session_state.log_df = load_work_logs()
-if 'leave_df' not in st.session_state: st.session_state.leave_df = load_leave_usage()
+if "city_df"  not in st.session_state: st.session_state.city_df  = load_locations()
+if "emp_df"   not in st.session_state: st.session_state.emp_df   = load_employees()
+if "log_df"   not in st.session_state: st.session_state.log_df   = load_work_logs()
+if "leave_df" not in st.session_state: st.session_state.leave_df = load_leave_usage()
 
 # ── 7. Sidebar Menu ───────────────────────────────────────────
 if is_admin():
@@ -209,7 +181,7 @@ else:
     menu = st.sidebar.radio("Go to", ["2. Log Worked Hours", "3. Plan/Submit Leave", "4. Dashboard & Email"])
 
 # ═══════════════════════════════════════════════════════════════
-# 1. Employee Setup (Admin only)
+# 1. Employee Setup
 # ═══════════════════════════════════════════════════════════════
 if menu == "1. Employee Setup":
     if not is_admin():
@@ -223,25 +195,25 @@ if menu == "1. Employee Setup":
             if st.button("Add to List", use_container_width=True):
                 if nc and ny:
                     new_row = pd.DataFrame([{"company_name": nc, "city_name": ny}])
-                    updated = pd.concat([st.session_state.city_df.reset_index(drop=True), new_row], ignore_index=True)
-                    if write_sheet("locations", updated):
+                    updated = pd.concat([st.session_state.city_df, new_row], ignore_index=True)
+                    if upsert_table("locations", updated):
                         st.session_state.city_df = load_locations(); st.success("✅ Saved!"); time.sleep(1); st.rerun()
         disp_c = st.session_state.city_df.copy(); disp_c.insert(0, "Select", False)
         ed_c = st.data_editor(disp_c, use_container_width=True, key="ced")
         c1, c2 = st.columns(2)
         with c1:
             if st.button("Save Changes", use_container_width=True):
-                if write_sheet("locations", ed_c.drop(columns=["Select"]).reset_index(drop=True)):
+                if upsert_table("locations", ed_c.drop(columns=["Select"]).reset_index(drop=True)):
                     st.session_state.city_df = load_locations(); st.success("✅ Saved!"); time.sleep(1); st.rerun()
         with c2:
             if st.button("🗑️ Delete Selected Company", use_container_width=True):
                 if ed_c["Select"].any(): st.session_state.loc_del_conf = True
-        if st.session_state.get('loc_del_conf', False):
+        if st.session_state.get("loc_del_conf", False):
             st.error("⚠️ Delete selected company?"); cy, cn = st.columns([1, 4])
             with cy:
                 if st.button("Yes", key="ly"):
-                    updated = st.session_state.city_df.drop(ed_c[ed_c["Select"] == True].index).reset_index(drop=True)
-                    if write_sheet("locations", updated):
+                    updated = st.session_state.city_df[~ed_c["Select"]].reset_index(drop=True)
+                    if upsert_table("locations", updated):
                         st.session_state.city_df = load_locations(); st.session_state.loc_del_conf = False; st.success("✅ Saved!"); time.sleep(1); st.rerun()
             with cn:
                 if st.button("No", key="ln"): st.session_state.loc_del_conf = False; st.rerun()
@@ -257,15 +229,15 @@ if menu == "1. Employee Setup":
                 rule = SICK_LEAVE_RULES.get(city_part, {"text": "ℹ️ No law found.", "rate": None, "max": None})
                 st.info(rule["text"])
                 if rule["rate"] is None:
-                    st.columns(2); ar = st.number_input("Sick Rate (1hr per X)", value=40); ms = st.number_input("Sick Max", value=40)
+                    ar = st.number_input("Sick Rate (1hr per X)", value=40); ms = st.number_input("Sick Max", value=40)
                 else: ar, ms = rule["rate"], rule["max"]
             et = st.selectbox("Type", ["Full-Time", "Part-Time (with vacation)", "Part-Time (No vacation)"])
             vl = st.number_input("Annual Vacation Limit", value=(80.0 if "Full" in et else (40.0 if "with" in et else 0.0)))
             if st.button("Add Employee", type="primary", use_container_width=True):
                 if nm and em and lo != "Select Location":
                     new_p = pd.DataFrame([{"Name": nm, "Email": em, "Location": lo, "Type": et, "Vacation_Limit": vl, "Sick_Rate": ar, "Sick_Max": ms}])
-                    updated = pd.concat([st.session_state.emp_df.reset_index(drop=True), new_p], ignore_index=True)
-                    if write_sheet("employees", updated):
+                    updated = pd.concat([st.session_state.emp_df, new_p], ignore_index=True)
+                    if upsert_table("employees", updated):
                         st.session_state.emp_df = load_employees(); st.success("✅ Saved!"); time.sleep(1); st.rerun()
 
 # ═══════════════════════════════════════════════════════════════
@@ -297,8 +269,9 @@ elif menu == "2. Log Worked Hours":
                         if r["Hours Worked"] > 0:
                             nl.append({"Employee": r["Employee Name"], "Status": r["Employee Status"], "Start_Date": str(dr[0]), "End_Date": str(dr[1]), "Hours_Worked": r["Hours Worked"]})
                     if nl:
-                        updated_log = pd.concat([st.session_state.log_df.reset_index(drop=True), pd.DataFrame(nl)], ignore_index=True)
-                        write_sheet("work_log", updated_log)
+                        existing = load_work_logs()
+                        updated_log = pd.concat([existing, pd.DataFrame(nl)], ignore_index=True)
+                        upsert_table("work_log", updated_log)
                     if r_names:
                         logs = load_work_logs(); r_recs = []
                         for rn in r_names:
@@ -308,20 +281,20 @@ elif menu == "2. Log Worked Hours":
                             us = cu[cu["Employee"] == rn]["Sick_Used"].sum()
                             r_recs.append({"Name": rn, "Resigned_Date": str(dr[1]), "Location": inf["Location"], "Total_Worked": tw, "Retained_Vacation": round(float(inf["Vacation_Limit"]) - uv, 2), "Retained_Sick": round((tw / float(inf["Sick_Rate"])) - us, 2), "Paid_Date": str(dr[1]), "Paid_Amount": 0.0, "Email": str(inf["Email"]), "Type": inf["Type"], "Vacation_Limit": inf["Vacation_Limit"], "Sick_Rate": inf["Sick_Rate"], "Sick_Max": inf["Sick_Max"]})
                         updated_res = pd.concat([load_resigned(), pd.DataFrame(r_recs)], ignore_index=True)
-                        write_sheet("resigned_employees", updated_res)
+                        upsert_table("resigned_employees", updated_res)
                         updated_emp = full_emp[~full_emp["Name"].isin(r_names)]
-                        write_sheet("employees", updated_emp)
+                        upsert_table("employees", updated_emp)
                     st.success("✅ Saved!"); time.sleep(1); st.rerun()
         with c2:
             if st.button("🗑️ Delete Selected Employees", use_container_width=True, disabled=not is_admin()):
                 if ed_in["Select"].any(): st.session_state.emp_del_conf = True
-        if st.session_state.get('emp_del_conf', False):
+        if st.session_state.get("emp_del_conf", False):
             st.error("⚠️ Delete selected employees?"); dy, dn = st.columns([1, 4])
             with dy:
                 if st.button("Yes", key="ey_emp"):
                     fe = load_employees()
                     updated = fe[~fe["Name"].isin(ed_in[ed_in["Select"] == True]["Employee Name"].tolist())]
-                    if write_sheet("employees", updated):
+                    if upsert_table("employees", updated):
                         st.session_state.emp_del_conf = False; st.success("✅ Saved!"); time.sleep(1); st.rerun()
             with dn:
                 if st.button("No", key="en_emp"): st.session_state.emp_del_conf = False; st.rerun()
@@ -337,19 +310,12 @@ elif menu == "2. Log Worked Hours":
 - 날짜 형식: `2026-01-01`
 - 예시: `John Kim, 2026-01-01, 2026-01-15, 80.0`
         """)
-
         template_df = pd.DataFrame([
             {"Employee": "John Kim",  "Start_Date": "2026-01-01", "End_Date": "2026-01-15", "Hours_Worked": 80.0},
             {"Employee": "Jane Lee",  "Start_Date": "2026-01-01", "End_Date": "2026-01-15", "Hours_Worked": 72.0},
             {"Employee": "Tom Park",  "Start_Date": "2026-01-16", "End_Date": "2026-01-31", "Hours_Worked": 68.0},
         ])
-        st.download_button(
-            label="📥 Download Template CSV",
-            data=template_df.to_csv(index=False).encode('utf-8-sig'),
-            file_name="bulk_upload_template.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
+        st.download_button(label="📥 Download Template CSV", data=template_df.to_csv(index=False).encode("utf-8-sig"), file_name="bulk_upload_template.csv", mime="text/csv", use_container_width=True)
 
         uploaded_csv = st.file_uploader("CSV 파일 선택", type=["csv"], key="bulk_csv")
         if uploaded_csv and is_admin():
@@ -362,38 +328,29 @@ elif menu == "2. Log Worked Hours":
                 else:
                     udf["Hours_Worked"] = pd.to_numeric(udf["Hours_Worked"], errors="coerce").fillna(0)
                     udf["Status"] = "Employed"
-
                     valid_names = st.session_state.emp_df["Name"].tolist()
                     udf["_valid"] = udf["Employee"].isin(valid_names)
                     invalid_names = udf[~udf["_valid"]]["Employee"].unique().tolist()
                     valid_udf = udf[udf["_valid"]].drop(columns=["_valid"]).reset_index(drop=True)
-
                     col_info1, col_info2 = st.columns(2)
-                    with col_info1:
-                        st.success(f"✅ 유효한 레코드: **{len(valid_udf)}건**")
+                    with col_info1: st.success(f"✅ 유효한 레코드: **{len(valid_udf)}건**")
                     with col_info2:
-                        if invalid_names:
-                            st.warning(f"⚠️ 미등록 직원 (제외됨): {', '.join(invalid_names)}")
-
+                        if invalid_names: st.warning(f"⚠️ 미등록 직원 (제외됨): {', '.join(invalid_names)}")
                     if not valid_udf.empty:
                         st.dataframe(valid_udf[["Employee","Start_Date","End_Date","Hours_Worked"]], use_container_width=True, hide_index=True)
-
                         if st.button("🚀 Bulk Save to Work Log", type="primary", use_container_width=True):
                             existing = load_work_logs()
                             to_add = valid_udf[["Employee","Status","Start_Date","End_Date","Hours_Worked"]]
-                            combined = pd.concat([existing.reset_index(drop=True), to_add], ignore_index=True)
-                            if write_sheet("work_log", combined):
-                                # [BUG FIX 1] 저장 후 업로드한 기간으로 filter 자동 세팅
+                            combined = pd.concat([existing, to_add], ignore_index=True)
+                            if upsert_table("work_log", combined):
                                 try:
                                     first_start = pd.to_datetime(valid_udf["Start_Date"].iloc[0]).date()
-                                    first_end = pd.to_datetime(valid_udf["End_Date"].iloc[0]).date()
+                                    first_end   = pd.to_datetime(valid_udf["End_Date"].iloc[0]).date()
                                     st.session_state["bulk_uploaded"] = True
-                                    st.session_state["bulk_period"] = (first_start, first_end)
-                                except:
-                                    pass
+                                    st.session_state["bulk_period"]   = (first_start, first_end)
+                                except: pass
                                 st.success(f"✅ {len(valid_udf)}건 저장 완료!")
-                                time.sleep(1)
-                                st.rerun()
+                                time.sleep(1); st.rerun()
             except Exception as e:
                 st.error(f"❌ CSV 읽기 오류: {e}")
         elif uploaded_csv and not is_admin():
@@ -402,11 +359,9 @@ elif menu == "2. Log Worked Hours":
     # ── 기존 로그 조회 ────────────────────────────────────────
     st.markdown("---")
     st.session_state.log_df = load_work_logs()
-
-    # [BUG FIX 1] bulk upload 직후엔 해당 기간으로 자동 필터
     if st.session_state.get("bulk_uploaded") and st.session_state.get("bulk_period"):
         default_period = st.session_state["bulk_period"]
-        st.session_state["bulk_uploaded"] = False  # 한 번만 적용
+        st.session_state["bulk_uploaded"] = False
     else:
         default_period = (date.today(), date.today())
 
@@ -422,7 +377,7 @@ elif menu == "2. Log Worked Hours":
             if isinstance(dr, (list, tuple)) and len(dr) == 2:
                 fdf = fdf[(fdf["Start_Date"] >= dr[0]) & (fdf["Start_Date"] <= dr[1])]
             if not fdf.empty:
-                st.download_button(label="📥 Download Logs", data=fdf.reset_index(drop=True).to_csv(index=False).encode('utf-8-sig'), file_name="WorkLog.csv", mime="text/csv")
+                st.download_button(label="📥 Download Logs", data=fdf.reset_index(drop=True).to_csv(index=False).encode("utf-8-sig"), file_name="WorkLog.csv", mime="text/csv")
 
         ldat = fdf.reset_index(drop=True).copy()
         ldat.insert(0, "No.", range(1, len(ldat) + 1))
@@ -440,18 +395,18 @@ elif menu == "2. Log Worked Hours":
                     if idx < len(fdf):
                         orig_idx = fdf.index[idx]
                         full_log.at[orig_idx, "Hours_Worked"] = row.get("Hours_Worked", 0)
-                if write_sheet("work_log", full_log.reset_index(drop=True)):
+                if upsert_table("work_log", full_log.reset_index(drop=True)):
                     st.success("✅ Saved!"); time.sleep(1); st.rerun()
-        if st.session_state.get('log_del_conf', False):
+        if st.session_state.get("log_del_conf", False):
             st.error("⚠️ Delete selected log entries?")
             ly, ln = st.columns([1, 4])
             with ly:
                 if st.button("Yes", key="ly_log"):
                     full_log = load_work_logs()
-                    del_emp = ed_l[ed_l["Select"] == True]["Employee"].tolist()
+                    del_emp   = ed_l[ed_l["Select"] == True]["Employee"].tolist()
                     del_start = ed_l[ed_l["Select"] == True]["Start_Date"].tolist()
                     mask = ~(full_log["Employee"].isin(del_emp) & full_log["Start_Date"].isin(del_start))
-                    if write_sheet("work_log", full_log[mask].reset_index(drop=True)):
+                    if upsert_table("work_log", full_log[mask].reset_index(drop=True)):
                         st.session_state.log_del_conf = False; st.success("✅ Saved!"); time.sleep(1); st.rerun()
             with ln:
                 if st.button("No", key="ln_log"): st.session_state.log_del_conf = False; st.rerun()
@@ -495,9 +450,9 @@ elif menu == "3. Plan/Submit Leave":
         with i4: p_status = st.selectbox("Status", ["Plan", "Used"])
         with i5: p_hours = st.number_input("Hours", min_value=0.5, step=0.5, value=8.0)
         if st.button("Submit to Calendar", type="primary", use_container_width=True, disabled=not is_admin()):
-            new_l = pd.DataFrame([{"Employee": p_emp, "Date": p_date.strftime('%Y-%m-%d'), "Vacation_Used": p_hours if p_type == "Vacation" else 0.0, "Sick_Used": p_hours if p_type == "Sick Leave" else 0.0, "Status": p_status, "Note": ""}])
+            new_l = pd.DataFrame([{"Employee": p_emp, "Date": p_date.strftime("%Y-%m-%d"), "Vacation_Used": p_hours if p_type == "Vacation" else 0.0, "Sick_Used": p_hours if p_type == "Sick Leave" else 0.0, "Status": p_status, "Note": ""}])
             updated = pd.concat([cu, new_l], ignore_index=True)
-            if write_sheet("leave_usage", updated):
+            if upsert_table("leave_usage", updated):
                 st.success("✅ Saved!"); time.sleep(1); st.rerun()
 
     st.subheader("📊 Current Balances")
@@ -512,21 +467,21 @@ elif menu == "3. Plan/Submit Leave":
         summ.append({"Name": e["Name"], "Location": e["Location"], "Total Worked": tw, "Total Vacation": round(float(e["Vacation_Limit"]), 2), "Used Vacation": uv, "Retained Vacation": round(float(e["Vacation_Limit"]) - uv, 2), "Sick Leave Accrued": s_acc, "Used Sick Leave": us, "Retained Sick Leave": round(s_acc - us, 2)})
     if summ:
         df_summ = pd.DataFrame(summ); df_summ.insert(0, "Select", False)
-        def apply_st(val): return 'background-color: #FFC0CB; color: black; font-weight: bold' if isinstance(val, (int, float)) and val < 0 else 'background-color: #FFFF00; color: black; font-weight: bold'
-        edited_summ = st.data_editor(df_summ.style.applymap(apply_st, subset=['Retained Vacation', 'Retained Sick Leave']).format(precision=2), use_container_width=True, hide_index=True, key="bal_editor")
+        def apply_st(val): return "background-color: #FFC0CB; color: black; font-weight: bold" if isinstance(val, (int, float)) and val < 0 else "background-color: #FFFF00; color: black; font-weight: bold"
+        edited_summ = st.data_editor(df_summ.style.applymap(apply_st, subset=["Retained Vacation", "Retained Sick Leave"]).format(precision=2), use_container_width=True, hide_index=True, key="bal_editor")
         col_b1, col_b2 = st.columns(2)
         with col_b1:
             if st.button("💾 Save Balances Changes", use_container_width=True, disabled=not is_admin()):
                 emp_data = load_employees()
                 for _, row in edited_summ.iterrows():
                     emp_data.loc[emp_data["Name"] == row["Name"], "Vacation_Limit"] = row["Total Vacation"]
-                if write_sheet("employees", emp_data):
+                if upsert_table("employees", emp_data):
                     st.success("✅ Saved!"); time.sleep(1); st.rerun()
         with col_b2:
             if st.button("🗑️ Delete Selected Employees", use_container_width=True, disabled=not is_admin()):
                 if edited_summ["Select"].any():
                     emp_data = load_employees(); names = edited_summ[edited_summ["Select"] == True]["Name"].tolist()
-                    if write_sheet("employees", emp_data[~emp_data["Name"].isin(names)]):
+                    if upsert_table("employees", emp_data[~emp_data["Name"].isin(names)]):
                         st.success("✅ Saved!"); time.sleep(1); st.rerun()
 
     with st.expander("📥 Download & Manage Usage/Plan Logs"):
@@ -534,17 +489,17 @@ elif menu == "3. Plan/Submit Leave":
             fl_emp = st.selectbox("Select Employee to Filter", ["All Employees"] + sorted(cu["Employee"].unique().tolist()), key="f_del")
             cu_to_edit = cu.copy() if fl_emp == "All Employees" else cu[cu["Employee"] == fl_emp]
             if not cu_to_edit.empty:
-                st.download_button(label=f"📥 Download [{fl_emp}] Leave History", data=cu_to_edit.to_csv(index=False).encode('utf-8-sig'), file_name="LeaveHistory.csv", mime="text/csv", use_container_width=True)
+                st.download_button(label=f"📥 Download [{fl_emp}] Leave History", data=cu_to_edit.to_csv(index=False).encode("utf-8-sig"), file_name="LeaveHistory.csv", mime="text/csv", use_container_width=True)
             cu_disp = cu_to_edit.copy(); cu_disp.insert(0, "Select", False)
             ed_usage = st.data_editor(cu_disp, use_container_width=True, key="usage_final", hide_index=True)
             if st.button("Delete Selected Entries", disabled=not is_admin()):
                 if ed_usage["Select"].any(): st.session_state.usage_del_conf = True
-            if st.session_state.get('usage_del_conf', False):
+            if st.session_state.get("usage_del_conf", False):
                 st.error("⚠️ Permanently delete selected entries?"); uy_c, un_c = st.columns([1, 4])
                 with uy_c:
                     if st.button("Yes", key="uy_usage"):
                         updated = cu.drop(ed_usage[ed_usage["Select"] == True].index).reset_index(drop=True)
-                        if write_sheet("leave_usage", updated):
+                        if upsert_table("leave_usage", updated):
                             st.session_state.usage_del_conf = False; st.success("✅ Saved!"); time.sleep(1); st.rerun()
                 with un_c:
                     if st.button("No", key="un_usage"): st.session_state.usage_del_conf = False; st.rerun()
@@ -558,9 +513,9 @@ elif menu == "4. Dashboard & Email":
     if not rdf.empty:
         st.subheader("👤 Resigned Employee List")
         def apply_res_style(df):
-            style_df = pd.DataFrame('', index=df.index, columns=df.columns)
+            style_df = pd.DataFrame("", index=df.index, columns=df.columns)
             mask = df.applymap(lambda x: isinstance(x, (int, float)) and x < 0)
-            style_df[mask] = 'background-color: #FFC0CB; color: black; font-weight: bold'
+            style_df[mask] = "background-color: #FFC0CB; color: black; font-weight: bold"
             return style_df
         edited_rdf = st.data_editor(rdf.assign(Select=False).style.apply(apply_res_style, axis=None).format(precision=2), use_container_width=True, height=300, key="res")
         c1, c2, c3 = st.columns([1, 1, 4])
@@ -572,16 +527,16 @@ elif menu == "4. Dashboard & Email":
                     for _, r in sel.iterrows():
                         new = pd.DataFrame([{"Name": r["Name"], "Email": r["Email"], "Location": r["Location"], "Type": r["Type"], "Vacation_Limit": r["Vacation_Limit"], "Sick_Rate": r["Sick_Rate"], "Sick_Max": r["Sick_Max"]}])
                         m_emp = pd.concat([m_emp, new], ignore_index=True)
-                    write_sheet("employees", m_emp)
-                    write_sheet("resigned_employees", rdf.drop(sel.index).reset_index(drop=True))
+                    upsert_table("employees", m_emp)
+                    upsert_table("resigned_employees", rdf.drop(sel.index).reset_index(drop=True))
                     st.success("✅ Saved!"); time.sleep(1); st.rerun()
         with c2:
             if st.button("🗑️ Delete", disabled=not is_admin()):
-                write_sheet("resigned_employees", rdf.drop(edited_rdf[edited_rdf["Select"] == True].index).reset_index(drop=True))
+                upsert_table("resigned_employees", rdf.drop(edited_rdf[edited_rdf["Select"] == True].index).reset_index(drop=True))
                 st.success("✅ Saved!"); time.sleep(1); st.rerun()
         with c3:
             if st.button("💾 Save", disabled=not is_admin()):
-                write_sheet("resigned_employees", edited_rdf.drop(columns=["Select"]))
+                upsert_table("resigned_employees", edited_rdf.drop(columns=["Select"]))
                 st.success("✅ Saved!"); time.sleep(1); st.rerun()
         st.markdown("---")
         st.subheader("📑 Detailed History (Resigned Staff)")
@@ -589,7 +544,7 @@ elif menu == "4. Dashboard & Email":
         for name in rdf["Name"].tolist():
             with st.expander(f"🔍 Detail for: {name}"):
                 r_info = rdf[rdf["Name"] == name].iloc[0]
-                emp_logs = fl[fl["Employee"] == name].sort_values(by="Start_Date")
+                emp_logs  = fl[fl["Employee"] == name].sort_values(by="Start_Date")
                 emp_usage = usage_data[(usage_data["Employee"] == name) & (usage_data["Status"] == "Used")].sort_values(by="Date")
                 rate = float(r_info["Sick_Rate"]) if float(r_info.get("Sick_Rate", 0)) > 0 else 40
                 tab1, tab2 = st.tabs(["🕒 Work Logs", "📅 Leave Usage"])
@@ -622,21 +577,21 @@ elif menu == "4. Dashboard & Email":
             with e2: dr = st.date_input("Report Period", value=(date(date.today().year, 1, 1), date.today()))
             if len(dr) == 2:
                 logs = load_work_logs(); usage = load_leave_usage()
-                p_logs = logs[(logs["Employee"] == sel_e_name) & (logs["Start_Date"] >= dr[0]) & (logs["Start_Date"] <= dr[1])]
+                p_logs  = logs[(logs["Employee"] == sel_e_name) & (logs["Start_Date"] >= dr[0]) & (logs["Start_Date"] <= dr[1])]
                 p_usage = usage[(usage["Employee"] == sel_e_name) & (pd.to_datetime(usage["Date"]).dt.date >= dr[0]) & (pd.to_datetime(usage["Date"]).dt.date <= dr[1]) & (usage["Status"] == "Used")]
                 tw_p = p_logs["Hours_Worked"].sum(); uv_p = p_usage["Vacation_Used"].sum(); us_p = p_usage["Sick_Used"].sum()
                 total_w = logs[logs["Employee"] == sel_e_name]["Hours_Worked"].sum()
-                rate = float(e_info["Sick_Rate"]) if float(e_info.get("Sick_Rate", 0)) > 0 else 40
+                rate  = float(e_info["Sick_Rate"]) if float(e_info.get("Sick_Rate", 0)) > 0 else 40
                 ret_v = round(float(e_info["Vacation_Limit"]) - usage[(usage["Employee"] == sel_e_name) & (usage["Status"] == "Used")]["Vacation_Used"].sum(), 2)
                 ret_s = round((total_w / rate) - usage[(usage["Employee"] == sel_e_name) & (usage["Status"] == "Used")]["Sick_Used"].sum(), 2)
-                body_text = f"Dear {sel_e_name},\n\nOfficial summary from {dr[0]} to {dr[1]}:\n\n"
+                body_text  = f"Dear {sel_e_name},\n\nOfficial summary from {dr[0]} to {dr[1]}:\n\n"
                 body_text += f"- Total Hours Worked: {tw_p:.2f} hrs\n"
                 if uv_p > 0: body_text += f"- Used Vacation: {uv_p:.2f} hrs\n"
                 if us_p > 0: body_text += f"- Used Sick leave: {us_p:.2f} hrs\n"
                 if not p_usage.empty:
                     body_text += "\nLeave History Detail:\n"
                     for _, row in p_usage.iterrows():
-                        h = row['Vacation_Used'] if float(row['Vacation_Used']) > 0 else row['Sick_Used']
+                        h = row["Vacation_Used"] if float(row["Vacation_Used"]) > 0 else row["Sick_Used"]
                         body_text += f"- {row['Date']} ({h:.2f} hrs)\n"
                 body_text += "\nCurrent Balance Status (As of today):\n"
                 if ret_v != 0: body_text += f"- Retained Vacation: {ret_v:.2f} hrs\n"
@@ -648,17 +603,17 @@ elif menu == "4. Dashboard & Email":
                     except: pass
                 body_text += "\nBest regards,\nAccounting Department\nAmlotus"
                 edit_subject = st.text_input("Subject", value=f"Leave Summary - {sel_e_name}")
-                edit_body = st.text_area("Content", value=body_text, height=350)
-                google_pw = st.text_input("Enter Google App Password", type="password")
+                edit_body    = st.text_area("Content", value=body_text, height=350)
+                google_pw    = st.text_input("Enter Google App Password", type="password")
                 if st.button("🚀 Send Email", type="primary", use_container_width=True, disabled=not is_admin()):
                     if google_pw:
                         html_c = edit_body.replace("\n", "<br>")
                         if ret_v < 0: html_c = html_c.replace(f"Retained Vacation: {ret_v:.2f} hrs", f"<span style='color:red; font-weight:bold;'>Retained Vacation: {ret_v:.2f} hrs</span>")
                         if ret_s < 0: html_c = html_c.replace(f"Retained Sick Leave: {ret_s:.2f} hrs", f"<span style='color:red; font-weight:bold;'>Retained Sick Leave: {ret_s:.2f} hrs</span>")
                         try:
-                            msg = MIMEMultipart(); msg['From'] = "accounting@amlotus.edu"; msg['To'] = target_email
-                            msg['Subject'] = edit_subject; msg.attach(MIMEText(f"<html><body>{html_c}</body></html>", 'html'))
-                            server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls()
+                            msg = MIMEMultipart(); msg["From"] = "accounting@amlotus.edu"; msg["To"] = target_email
+                            msg["Subject"] = edit_subject; msg.attach(MIMEText(f"<html><body>{html_c}</body></html>", "html"))
+                            server = smtplib.SMTP("smtp.gmail.com", 587); server.starttls()
                             server.login("accounting@amlotus.edu", google_pw); server.send_message(msg); server.quit()
                             st.success("✅ Email sent!"); time.sleep(1)
                         except Exception as e: st.error(f"❌ Error: {e}")
