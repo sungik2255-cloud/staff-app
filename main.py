@@ -43,7 +43,6 @@ def upsert_table(table_name, df):
         st.error(f"❌ 저장 실패: {e}")
         return False
 
-# ✅ employees 전용 삭제 함수 — 오직 이 함수로만 employees 삭제 가능
 def delete_employees_by_name(names_to_delete):
     try:
         emp_data = load_employees()
@@ -53,33 +52,83 @@ def delete_employees_by_name(names_to_delete):
         st.error(f"❌ 직원 삭제 실패: {e}")
         return False
 
-# ── 3. Leave Detail Modal ─────────────────────────────────────
+# ── 3. Leave Detail Modal (수정/삭제 포함) ────────────────────
 @st.dialog("📋 Leave Detail")
 def show_leave_modal(record):
     emp        = record.get("Employee", "")
     dt         = record.get("Date", "")
     vac        = float(record.get("Vacation_Used", 0))
     sick       = float(record.get("Sick_Used", 0))
-    leave_type = "🏖️ Vacation" if vac > 0 else "🤒 Sick Leave"
+    leave_type = "Vacation" if vac > 0 else "Sick Leave"
     hours      = vac if vac > 0 else sick
-    status     = record.get("Status", "")
-    status_icon = "✅ Used" if status == "Used" else "📌 Plan"
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**👤 Employee**")
-        st.markdown("**📅 Date**")
-        st.markdown("**🗂️ Leave Type**")
-        st.markdown("**⏱️ Hours**")
-        st.markdown("**📊 Status**")
-    with col2:
-        st.markdown(emp)
-        st.markdown(dt)
-        st.markdown(leave_type)
-        st.markdown(f"{hours}h")
-        st.markdown(status_icon)
+    status     = record.get("Status", "Used")
+    rec_id     = record.get("id", None)
+
+    st.markdown(f"**👤 Employee:** {emp}  \n**📅 Date:** {dt}")
+    st.divider()
+
+    if is_admin():
+        new_type   = st.selectbox("Leave Type", ["Vacation", "Sick Leave"],
+                                  index=0 if leave_type == "Vacation" else 1)
+        new_hours  = st.number_input("Hours", min_value=0.5, step=0.5, value=float(hours))
+        new_status = st.selectbox("Status", ["Plan", "Used"],
+                                  index=0 if status == "Plan" else 1)
+
+        col_save, col_del = st.columns(2)
+        with col_save:
+            if st.button("💾 Save Changes", type="primary", use_container_width=True):
+                cu_all = load_leave_usage()
+                if rec_id is not None:
+                    mask = cu_all["id"] == rec_id
+                else:
+                    mask = (cu_all["Employee"] == emp) & (cu_all["Date"] == dt)
+                cu_all.loc[mask, "Vacation_Used"] = new_hours if new_type == "Vacation" else 0.0
+                cu_all.loc[mask, "Sick_Used"]     = new_hours if new_type == "Sick Leave" else 0.0
+                cu_all.loc[mask, "Status"]        = new_status
+                if upsert_table("leave_usage", cu_all):
+                    st.success("✅ 저장됐습니다!")
+                    time.sleep(1)
+                    st.rerun()
+        with col_del:
+            if st.button("🗑️ Delete", use_container_width=True):
+                st.session_state["modal_del_confirm"] = True
+
+        if st.session_state.get("modal_del_confirm", False):
+            st.error("⚠️ 이 항목을 삭제할까요?")
+            dy, dn = st.columns(2)
+            with dy:
+                if st.button("Yes, Delete", key="modal_del_yes"):
+                    cu_all = load_leave_usage()
+                    if rec_id is not None:
+                        cu_all = cu_all[cu_all["id"] != rec_id].reset_index(drop=True)
+                    else:
+                        cu_all = cu_all[~((cu_all["Employee"] == emp) & (cu_all["Date"] == dt))].reset_index(drop=True)
+                    if upsert_table("leave_usage", cu_all):
+                        st.session_state["modal_del_confirm"] = False
+                        st.success("✅ 삭제됐습니다!")
+                        time.sleep(1)
+                        st.rerun()
+            with dn:
+                if st.button("No", key="modal_del_no"):
+                    st.session_state["modal_del_confirm"] = False
+                    st.rerun()
+    else:
+        # 읽기 전용
+        leave_icon = "🏖️ Vacation" if leave_type == "Vacation" else "🤒 Sick Leave"
+        status_icon = "✅ Used" if status == "Used" else "📌 Plan"
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**🗂️ Leave Type**")
+            st.markdown("**⏱️ Hours**")
+            st.markdown("**📊 Status**")
+        with col2:
+            st.markdown(leave_icon)
+            st.markdown(f"{hours}h")
+            st.markdown(status_icon)
+
     st.divider()
     st.caption("📋 Copy용 텍스트 (Ctrl+A → Ctrl+C)")
-    copy_text = f"Employee: {emp}\nDate: {dt}\nLeave Type: {leave_type.split(' ')[-1]}\nHours: {hours}h\nStatus: {status}"
+    copy_text = f"Employee: {emp}\nDate: {dt}\nLeave Type: {leave_type}\nHours: {hours}h\nStatus: {status}"
     st.code(copy_text, language=None)
 
 # ── 4. Login System ───────────────────────────────────────────
@@ -212,6 +261,7 @@ if "log_df"   not in st.session_state: st.session_state.log_df   = load_work_log
 if "leave_df" not in st.session_state: st.session_state.leave_df = load_leave_usage()
 if "leave_modal_record" not in st.session_state: st.session_state.leave_modal_record = None
 if "emp_form_key" not in st.session_state: st.session_state.emp_form_key = 0
+if "modal_del_confirm" not in st.session_state: st.session_state.modal_del_confirm = False
 if "selected_company" not in st.session_state:
     cdf = st.session_state.city_df
     st.session_state.selected_company = f"{cdf.iloc[0]['company_name']} - {cdf.iloc[0]['city_name']}" if not cdf.empty else ""
@@ -561,6 +611,7 @@ elif menu == "3. Plan/Submit Leave":
                         btn_label = f"{dot} {row['Employee']} ({s_char}, {hrs}h)"
                         if st.button(btn_label, key=f"badge_{c_year}_{c_month}_{day}_{idx}", use_container_width=True, help="클릭하면 상세 정보를 볼 수 있습니다"):
                             st.session_state.leave_modal_record = row.to_dict()
+                            st.session_state.modal_del_confirm = False
                             st.rerun()
 
     st.markdown("---")
