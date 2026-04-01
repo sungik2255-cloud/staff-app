@@ -602,12 +602,38 @@ elif menu == "3. Plan/Submit Leave":
         edited_summ = st.data_editor(df_summ.style.map(apply_st, subset=["Retained Vacation", "Retained Sick Leave"]).format(precision=2), use_container_width=True, hide_index=True, key="bal_editor")
         col_b1, col_b2 = st.columns(2)
         with col_b1:
-            if st.button("💾 Save Balances Changes", use_container_width=True, disabled=not is_admin()):
-                emp_data = load_employees()
-                for _, row in edited_summ.iterrows():
-                    emp_data.loc[emp_data["Name"] == row["Name"], "Vacation_Limit"] = row["Total Vacation"]
-                if upsert_table("employees", emp_data):
-                    st.success("✅ Saved!"); time.sleep(1); st.rerun()
+    if st.button("💾 Save Balances Changes", use_container_width=True, disabled=not is_admin()):
+        emp_data = load_employees()
+        cu_all = load_leave_usage()
+        for _, row in edited_summ.iterrows():
+            emp_name = row["Name"]
+            emp_data.loc[emp_data["Name"] == emp_name, "Vacation_Limit"] = row["Total Vacation"]
+            cur_vac = cu_all[cu_all["Employee"] == emp_name]["Vacation_Used"].sum()
+            new_vac = float(row["Used Vacation"])
+            diff_vac = new_vac - cur_vac
+            if abs(diff_vac) > 0.01:
+                if diff_vac > 0:
+                    new_row = pd.DataFrame([{"Employee": emp_name, "Date": str(date.today()), "Vacation_Used": diff_vac, "Sick_Used": 0.0, "Status": "Used", "Note": "manual adjustment"}])
+                    cu_all = pd.concat([cu_all, new_row], ignore_index=True)
+                else:
+                    vac_rows = cu_all[(cu_all["Employee"] == emp_name) & (cu_all["Vacation_Used"] > 0)]
+                    if not vac_rows.empty:
+                        last_idx = vac_rows.index[-1]
+                        cu_all.at[last_idx, "Vacation_Used"] = max(0, cu_all.at[last_idx, "Vacation_Used"] + diff_vac)
+            cur_sick = cu_all[cu_all["Employee"] == emp_name]["Sick_Used"].sum()
+            new_sick = float(row["Used Sick Leave"])
+            diff_sick = new_sick - cur_sick
+            if abs(diff_sick) > 0.01:
+                if diff_sick > 0:
+                    new_row = pd.DataFrame([{"Employee": emp_name, "Date": str(date.today()), "Vacation_Used": 0.0, "Sick_Used": diff_sick, "Status": "Used", "Note": "manual adjustment"}])
+                    cu_all = pd.concat([cu_all, new_row], ignore_index=True)
+                else:
+                    sick_rows = cu_all[(cu_all["Employee"] == emp_name) & (cu_all["Sick_Used"] > 0)]
+                    if not sick_rows.empty:
+                        last_idx = sick_rows.index[-1]
+                        cu_all.at[last_idx, "Sick_Used"] = max(0, cu_all.at[last_idx, "Sick_Used"] + diff_sick)
+        if upsert_table("employees", emp_data) and upsert_table("leave_usage", cu_all):
+            st.success("✅ Saved!"); time.sleep(1); st.rerun()
         with col_b2:
             # ✅ Current Balances에서는 leave_usage 데이터만 삭제 — employees 절대 건드리지 않음
             if st.button("🗑️ Delete Leave Data (Selected)", use_container_width=True, disabled=not is_admin()):
