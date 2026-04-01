@@ -211,9 +211,7 @@ if "emp_df"   not in st.session_state: st.session_state.emp_df   = load_employee
 if "log_df"   not in st.session_state: st.session_state.log_df   = load_work_logs()
 if "leave_df" not in st.session_state: st.session_state.leave_df = load_leave_usage()
 if "leave_modal_record" not in st.session_state: st.session_state.leave_modal_record = None
-# ✅ Add Employee 폼 초기화용 카운터
 if "emp_form_key" not in st.session_state: st.session_state.emp_form_key = 0
-# ✅ 2↔3페이지 company 연동
 if "selected_company" not in st.session_state:
     cdf = st.session_state.city_df
     st.session_state.selected_company = f"{cdf.iloc[0]['company_name']} - {cdf.iloc[0]['city_name']}" if not cdf.empty else ""
@@ -271,7 +269,6 @@ if menu == "1. Employee Setup":
         v_df = st.session_state.city_df.dropna()
         loc_opts = ["Select Location"] + [f"{r['company_name']} - {r['city_name']}" for _, r in v_df.iterrows()]
         with st.container(border=True):
-            # ✅ form_key로 저장 후 폼 완전 초기화
             fk = st.session_state.emp_form_key
             nm = st.text_input("Name", key=f"emp_name_{fk}", value="")
             em = st.text_input("Email", key=f"emp_email_{fk}", value="")
@@ -293,7 +290,6 @@ if menu == "1. Employee Setup":
                     updated = pd.concat([st.session_state.emp_df, new_p], ignore_index=True)
                     if upsert_table("employees", updated):
                         st.session_state.emp_df = load_employees()
-                        # ✅ 폼 초기화: key 카운터 증가
                         st.session_state.emp_form_key += 1
                         st.success("✅ Saved!")
                         time.sleep(1)
@@ -340,7 +336,6 @@ elif menu == "2. Log Worked Hours":
             if st.button("🚀 Save Worked Hours", type="primary", use_container_width=True, disabled=not is_admin()):
                 if isinstance(dr, (list, tuple)) and len(dr) == 2:
                     nl = []
-                    # ✅ Resigned는 별도 테이블로만 이동 — employees 삭제 안 함
                     resigned_records = []
                     full_emp = load_employees(); cu = load_leave_usage()
                     for _, r in ed_in.iterrows():
@@ -363,12 +358,10 @@ elif menu == "2. Log Worked Hours":
                     if resigned_records:
                         updated_res = pd.concat([load_resigned(), pd.DataFrame(resigned_records)], ignore_index=True)
                         upsert_table("resigned_employees", updated_res)
-                        # ✅ Resigned 처리 시 employees에서 제거 — 이것만 허용
                         r_names = [r["Name"] for r in resigned_records]
                         delete_employees_by_name(r_names)
                     st.success("✅ Saved!"); time.sleep(1); st.rerun()
         with c2:
-            # ✅ 오직 이 버튼만 employees 삭제 가능
             if st.button("🗑️ Delete Selected Employees", use_container_width=True, disabled=not is_admin()):
                 if ed_in["Select"].any(): st.session_state.emp_del_conf = True
         if st.session_state.get("emp_del_conf", False):
@@ -602,40 +595,39 @@ elif menu == "3. Plan/Submit Leave":
         edited_summ = st.data_editor(df_summ.style.map(apply_st, subset=["Retained Vacation", "Retained Sick Leave"]).format(precision=2), use_container_width=True, hide_index=True, key="bal_editor")
         col_b1, col_b2 = st.columns(2)
         with col_b1:
-    if st.button("💾 Save Balances Changes", use_container_width=True, disabled=not is_admin()):
-        emp_data = load_employees()
-        cu_all = load_leave_usage()
-        for _, row in edited_summ.iterrows():
-            emp_name = row["Name"]
-            emp_data.loc[emp_data["Name"] == emp_name, "Vacation_Limit"] = row["Total Vacation"]
-            cur_vac = cu_all[cu_all["Employee"] == emp_name]["Vacation_Used"].sum()
-            new_vac = float(row["Used Vacation"])
-            diff_vac = new_vac - cur_vac
-            if abs(diff_vac) > 0.01:
-                if diff_vac > 0:
-                    new_row = pd.DataFrame([{"Employee": emp_name, "Date": str(date.today()), "Vacation_Used": diff_vac, "Sick_Used": 0.0, "Status": "Used", "Note": "manual adjustment"}])
-                    cu_all = pd.concat([cu_all, new_row], ignore_index=True)
-                else:
-                    vac_rows = cu_all[(cu_all["Employee"] == emp_name) & (cu_all["Vacation_Used"] > 0)]
-                    if not vac_rows.empty:
-                        last_idx = vac_rows.index[-1]
-                        cu_all.at[last_idx, "Vacation_Used"] = max(0, cu_all.at[last_idx, "Vacation_Used"] + diff_vac)
-            cur_sick = cu_all[cu_all["Employee"] == emp_name]["Sick_Used"].sum()
-            new_sick = float(row["Used Sick Leave"])
-            diff_sick = new_sick - cur_sick
-            if abs(diff_sick) > 0.01:
-                if diff_sick > 0:
-                    new_row = pd.DataFrame([{"Employee": emp_name, "Date": str(date.today()), "Vacation_Used": 0.0, "Sick_Used": diff_sick, "Status": "Used", "Note": "manual adjustment"}])
-                    cu_all = pd.concat([cu_all, new_row], ignore_index=True)
-                else:
-                    sick_rows = cu_all[(cu_all["Employee"] == emp_name) & (cu_all["Sick_Used"] > 0)]
-                    if not sick_rows.empty:
-                        last_idx = sick_rows.index[-1]
-                        cu_all.at[last_idx, "Sick_Used"] = max(0, cu_all.at[last_idx, "Sick_Used"] + diff_sick)
-        if upsert_table("employees", emp_data) and upsert_table("leave_usage", cu_all):
-            st.success("✅ Saved!"); time.sleep(1); st.rerun()
+            if st.button("💾 Save Balances Changes", use_container_width=True, disabled=not is_admin()):
+                emp_data = load_employees()
+                cu_all = load_leave_usage()
+                for _, row in edited_summ.iterrows():
+                    emp_name = row["Name"]
+                    emp_data.loc[emp_data["Name"] == emp_name, "Vacation_Limit"] = row["Total Vacation"]
+                    cur_vac = cu_all[cu_all["Employee"] == emp_name]["Vacation_Used"].sum()
+                    new_vac = float(row["Used Vacation"])
+                    diff_vac = new_vac - cur_vac
+                    if abs(diff_vac) > 0.01:
+                        if diff_vac > 0:
+                            new_row = pd.DataFrame([{"Employee": emp_name, "Date": str(date.today()), "Vacation_Used": diff_vac, "Sick_Used": 0.0, "Status": "Used", "Note": "manual adjustment"}])
+                            cu_all = pd.concat([cu_all, new_row], ignore_index=True)
+                        else:
+                            vac_rows = cu_all[(cu_all["Employee"] == emp_name) & (cu_all["Vacation_Used"] > 0)]
+                            if not vac_rows.empty:
+                                last_idx = vac_rows.index[-1]
+                                cu_all.at[last_idx, "Vacation_Used"] = max(0, cu_all.at[last_idx, "Vacation_Used"] + diff_vac)
+                    cur_sick = cu_all[cu_all["Employee"] == emp_name]["Sick_Used"].sum()
+                    new_sick = float(row["Used Sick Leave"])
+                    diff_sick = new_sick - cur_sick
+                    if abs(diff_sick) > 0.01:
+                        if diff_sick > 0:
+                            new_row = pd.DataFrame([{"Employee": emp_name, "Date": str(date.today()), "Vacation_Used": 0.0, "Sick_Used": diff_sick, "Status": "Used", "Note": "manual adjustment"}])
+                            cu_all = pd.concat([cu_all, new_row], ignore_index=True)
+                        else:
+                            sick_rows = cu_all[(cu_all["Employee"] == emp_name) & (cu_all["Sick_Used"] > 0)]
+                            if not sick_rows.empty:
+                                last_idx = sick_rows.index[-1]
+                                cu_all.at[last_idx, "Sick_Used"] = max(0, cu_all.at[last_idx, "Sick_Used"] + diff_sick)
+                if upsert_table("employees", emp_data) and upsert_table("leave_usage", cu_all):
+                    st.success("✅ Saved!"); time.sleep(1); st.rerun()
         with col_b2:
-            # ✅ Current Balances에서는 leave_usage 데이터만 삭제 — employees 절대 건드리지 않음
             if st.button("🗑️ Delete Leave Data (Selected)", use_container_width=True, disabled=not is_admin()):
                 if edited_summ["Select"].any():
                     names = edited_summ[edited_summ["Select"] == True]["Name"].tolist()
@@ -676,7 +668,7 @@ elif menu == "4. Dashboard & Email":
         st.subheader("👤 Resigned Employee List")
         def apply_res_style(df):
             style_df = pd.DataFrame("", index=df.index, columns=df.columns)
-            mask = df.applymap(lambda x: isinstance(x, (int, float)) and x < 0)
+            mask = df.map(lambda x: isinstance(x, (int, float)) and x < 0)
             style_df[mask] = "background-color: #FFC0CB; color: black; font-weight: bold"
             return style_df
         edited_rdf = st.data_editor(rdf.assign(Select=False).style.apply(apply_res_style, axis=None).format(precision=2), use_container_width=True, height=300, key="res")
