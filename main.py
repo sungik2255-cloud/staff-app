@@ -43,6 +43,16 @@ def upsert_table(table_name, df):
         st.error(f"❌ 저장 실패: {e}")
         return False
 
+# ✅ employees 전용 삭제 함수 — 오직 이 함수로만 employees 삭제 가능
+def delete_employees_by_name(names_to_delete):
+    try:
+        emp_data = load_employees()
+        updated = emp_data[~emp_data["Name"].isin(names_to_delete)].reset_index(drop=True)
+        return upsert_table("employees", updated)
+    except Exception as e:
+        st.error(f"❌ 직원 삭제 실패: {e}")
+        return False
+
 # ── 3. Leave Detail Modal ─────────────────────────────────────
 @st.dialog("📋 Leave Detail")
 def show_leave_modal(record):
@@ -201,13 +211,14 @@ if "emp_df"   not in st.session_state: st.session_state.emp_df   = load_employee
 if "log_df"   not in st.session_state: st.session_state.log_df   = load_work_logs()
 if "leave_df" not in st.session_state: st.session_state.leave_df = load_leave_usage()
 if "leave_modal_record" not in st.session_state: st.session_state.leave_modal_record = None
-
-# ✅ 2페이지-3페이지 연동: selected_company 공유
+# ✅ Add Employee 폼 초기화용 카운터
+if "emp_form_key" not in st.session_state: st.session_state.emp_form_key = 0
+# ✅ 2↔3페이지 company 연동
 if "selected_company" not in st.session_state:
     cdf = st.session_state.city_df
     st.session_state.selected_company = f"{cdf.iloc[0]['company_name']} - {cdf.iloc[0]['city_name']}" if not cdf.empty else ""
 
-# ── 8. Sidebar Menu — 새로고침 후 페이지 유지 ─────────────────
+# ── 8. Sidebar Menu ───────────────────────────────────────────
 menu_options_admin  = ["1. Employee Setup", "2. Log Worked Hours", "3. Plan/Submit Leave", "4. Dashboard & Email"]
 menu_options_viewer = ["2. Log Worked Hours", "3. Plan/Submit Leave", "4. Dashboard & Email"]
 menu_options = menu_options_admin if is_admin() else menu_options_viewer
@@ -260,23 +271,35 @@ if menu == "1. Employee Setup":
         v_df = st.session_state.city_df.dropna()
         loc_opts = ["Select Location"] + [f"{r['company_name']} - {r['city_name']}" for _, r in v_df.iterrows()]
         with st.container(border=True):
-            nm, em, lo = st.text_input("Name"), st.text_input("Email"), st.selectbox("Location", options=loc_opts)
+            # ✅ form_key로 저장 후 폼 완전 초기화
+            fk = st.session_state.emp_form_key
+            nm = st.text_input("Name", key=f"emp_name_{fk}", value="")
+            em = st.text_input("Email", key=f"emp_email_{fk}", value="")
+            lo = st.selectbox("Location", options=loc_opts, key=f"emp_loc_{fk}")
             ar, ms = 40, 40
             if lo != "Select Location":
                 city_part = lo.split(" - ")[-1].strip()
                 rule = SICK_LEAVE_RULES.get(city_part, {"text": "ℹ️ No law found.", "rate": None, "max": None})
                 st.info(rule["text"])
                 if rule["rate"] is None:
-                    ar = st.number_input("Sick Rate (1hr per X)", value=40); ms = st.number_input("Sick Max", value=40)
+                    ar = st.number_input("Sick Rate (1hr per X)", value=40, key=f"emp_sr_{fk}")
+                    ms = st.number_input("Sick Max", value=40, key=f"emp_sm_{fk}")
                 else: ar, ms = rule["rate"], rule["max"]
-            et = st.selectbox("Type", ["Full-Time", "Part-Time (with vacation)", "Part-Time (No vacation)"])
-            vl = st.number_input("Annual Vacation Limit", value=(80.0 if "Full" in et else (40.0 if "with" in et else 0.0)))
+            et = st.selectbox("Type", ["Full-Time", "Part-Time (with vacation)", "Part-Time (No vacation)"], key=f"emp_type_{fk}")
+            vl = st.number_input("Annual Vacation Limit", value=(80.0 if "Full" in et else (40.0 if "with" in et else 0.0)), key=f"emp_vl_{fk}")
             if st.button("Add Employee", type="primary", use_container_width=True):
                 if nm and lo != "Select Location":
                     new_p = pd.DataFrame([{"Name": nm, "Email": em, "Location": lo, "Type": et, "Vacation_Limit": vl, "Sick_Rate": ar, "Sick_Max": ms}])
                     updated = pd.concat([st.session_state.emp_df, new_p], ignore_index=True)
                     if upsert_table("employees", updated):
-                        st.session_state.emp_df = load_employees(); st.success("✅ Saved!"); time.sleep(1); st.rerun()
+                        st.session_state.emp_df = load_employees()
+                        # ✅ 폼 초기화: key 카운터 증가
+                        st.session_state.emp_form_key += 1
+                        st.success("✅ Saved!")
+                        time.sleep(1)
+                        st.rerun()
+                else:
+                    st.warning("⚠️ Name과 Location은 필수입니다.")
 
 # ═══════════════════════════════════════════════════════════════
 # 2. Log Worked Hours
@@ -287,7 +310,6 @@ elif menu == "2. Log Worked Hours":
     st.markdown("### ⏳ Log Worked Hours")
 
     rc_list = [f"{r['company_name']} - {r['city_name']}" for _, r in st.session_state.city_df.iterrows()]
-    # ✅ selected_company 세션으로 2↔3페이지 연동
     cur_idx = rc_list.index(st.session_state.selected_company) if st.session_state.selected_company in rc_list else 0
     sc = st.selectbox("Select Company", options=rc_list, index=cur_idx, key="sc_page2")
     if sc != st.session_state.selected_company:
@@ -317,43 +339,48 @@ elif menu == "2. Log Worked Hours":
         with c1:
             if st.button("🚀 Save Worked Hours", type="primary", use_container_width=True, disabled=not is_admin()):
                 if isinstance(dr, (list, tuple)) and len(dr) == 2:
-                    nl = []; r_names = []
+                    nl = []
+                    # ✅ Resigned는 별도 테이블로만 이동 — employees 삭제 안 함
+                    resigned_records = []
                     full_emp = load_employees(); cu = load_leave_usage()
                     for _, r in ed_in.iterrows():
-                        if r["Employee Status"] == "Resigned": r_names.append(r["Employee Name"])
                         if r["Hours Worked"] > 0:
                             nl.append({"Employee": r["Employee Name"], "Status": r["Employee Status"], "Start_Date": str(dr[0]), "End_Date": str(dr[1]), "Hours_Worked": r["Hours Worked"]})
+                        if r["Employee Status"] == "Resigned":
+                            inf_rows = full_emp[full_emp["Name"] == r["Employee Name"]]
+                            if not inf_rows.empty:
+                                inf = inf_rows.iloc[0]
+                                logs = load_work_logs()
+                                tw = logs[logs["Employee"] == r["Employee Name"]]["Hours_Worked"].sum()
+                                uv = cu[cu["Employee"] == r["Employee Name"]]["Vacation_Used"].sum()
+                                us = cu[cu["Employee"] == r["Employee Name"]]["Sick_Used"].sum()
+                                sr = float(inf["Sick_Rate"]) if float(inf.get("Sick_Rate", 0)) > 0 else 40
+                                resigned_records.append({"Name": r["Employee Name"], "Resigned_Date": str(dr[1]), "Location": inf["Location"], "Total_Worked": tw, "Retained_Vacation": round(float(inf["Vacation_Limit"]) - uv, 2), "Retained_Sick": round((tw / sr) - us, 2), "Paid_Date": str(dr[1]), "Paid_Amount": 0.0, "Email": str(inf["Email"]), "Type": inf["Type"], "Vacation_Limit": inf["Vacation_Limit"], "Sick_Rate": inf["Sick_Rate"], "Sick_Max": inf["Sick_Max"]})
                     if nl:
                         existing = load_work_logs()
                         updated_log = pd.concat([existing, pd.DataFrame(nl)], ignore_index=True)
                         upsert_table("work_log", updated_log)
-                    if r_names:
-                        logs = load_work_logs(); r_recs = []
-                        for rn in r_names:
-                            inf = full_emp[full_emp["Name"] == rn].iloc[0]
-                            tw = logs[logs["Employee"] == rn]["Hours_Worked"].sum()
-                            uv = cu[cu["Employee"] == rn]["Vacation_Used"].sum()
-                            us = cu[cu["Employee"] == rn]["Sick_Used"].sum()
-                            r_recs.append({"Name": rn, "Resigned_Date": str(dr[1]), "Location": inf["Location"], "Total_Worked": tw, "Retained_Vacation": round(float(inf["Vacation_Limit"]) - uv, 2), "Retained_Sick": round((tw / float(inf["Sick_Rate"])) - us, 2), "Paid_Date": str(dr[1]), "Paid_Amount": 0.0, "Email": str(inf["Email"]), "Type": inf["Type"], "Vacation_Limit": inf["Vacation_Limit"], "Sick_Rate": inf["Sick_Rate"], "Sick_Max": inf["Sick_Max"]})
-                        updated_res = pd.concat([load_resigned(), pd.DataFrame(r_recs)], ignore_index=True)
+                    if resigned_records:
+                        updated_res = pd.concat([load_resigned(), pd.DataFrame(resigned_records)], ignore_index=True)
                         upsert_table("resigned_employees", updated_res)
-                        # ✅ Resigned 처리 시에만 employees에서 제거
-                        updated_emp = full_emp[~full_emp["Name"].isin(r_names)]
-                        upsert_table("employees", updated_emp)
+                        # ✅ Resigned 처리 시 employees에서 제거 — 이것만 허용
+                        r_names = [r["Name"] for r in resigned_records]
+                        delete_employees_by_name(r_names)
                     st.success("✅ Saved!"); time.sleep(1); st.rerun()
         with c2:
-            # ✅ 2페이지 상단 직원 삭제 — employees 테이블에서만 삭제
+            # ✅ 오직 이 버튼만 employees 삭제 가능
             if st.button("🗑️ Delete Selected Employees", use_container_width=True, disabled=not is_admin()):
                 if ed_in["Select"].any(): st.session_state.emp_del_conf = True
         if st.session_state.get("emp_del_conf", False):
-            st.error("⚠️ Delete selected employees from roster?"); dy, dn = st.columns([1, 4])
+            names_to_del = ed_in[ed_in["Select"] == True]["Employee Name"].tolist()
+            st.error(f"⚠️ 아래 직원을 명단에서 삭제할까요?\n{', '.join(names_to_del)}")
+            dy, dn = st.columns([1, 4])
             with dy:
                 if st.button("Yes", key="ey_emp"):
-                    fe = load_employees()
-                    names_to_del = ed_in[ed_in["Select"] == True]["Employee Name"].tolist()
-                    updated = fe[~fe["Name"].isin(names_to_del)]
-                    if upsert_table("employees", updated):
-                        st.session_state.emp_del_conf = False; st.success("✅ Saved!"); time.sleep(1); st.rerun()
+                    if delete_employees_by_name(names_to_del):
+                        st.session_state.emp_df = load_employees()
+                        st.session_state.emp_del_conf = False
+                        st.success("✅ 삭제 완료!"); time.sleep(1); st.rerun()
             with dn:
                 if st.button("No", key="en_emp"): st.session_state.emp_del_conf = False; st.rerun()
     else:
@@ -433,7 +460,6 @@ elif menu == "2. Log Worked Hours":
             if not fdf.empty:
                 st.download_button(label="📥 Download Logs", data=fdf.reset_index(drop=True).to_csv(index=False).encode("utf-8-sig"), file_name="WorkLog.csv", mime="text/csv")
 
-        # ✅ Employee 알파벳순 → Start_Date 오름차순 정렬
         ldat = fdf.sort_values(["Employee", "Start_Date"]).reset_index(drop=True).copy()
         ldat.insert(0, "No.", range(1, len(ldat) + 1))
         ldat.insert(1, "Select", False)
@@ -476,26 +502,22 @@ elif menu == "3. Plan/Submit Leave":
         show_leave_modal(st.session_state.leave_modal_record)
         st.session_state.leave_modal_record = None
 
-    # ✅ 2페이지와 동일한 company 선택 연동
     rc_list = [f"{r['company_name']} - {r['city_name']}" for _, r in st.session_state.city_df.iterrows()]
     cur_idx = rc_list.index(st.session_state.selected_company) if st.session_state.selected_company in rc_list else 0
     sc = st.selectbox("Select Company", options=rc_list, index=cur_idx, key="sc_page3")
     if sc != st.session_state.selected_company:
         st.session_state.selected_company = sc
 
-    # ✅ 해당 company 직원만 로드
     ce = load_employees()
     ce = ce[ce["Location"] == sc].copy()
     cl = load_work_logs()
     cu = load_leave_usage()
+    emp_names_in_company = ce["Name"].tolist()
+    cu_filtered = cu[cu["Employee"].isin(emp_names_in_company)] if not cu.empty else cu
 
     cy1, cm1, _ = st.columns([1, 1, 3])
     with cy1: today = date.today(); c_year = st.selectbox("Year", range(today.year-1, today.year+2), index=1)
     with cm1: c_month = st.selectbox("Month", range(1, 13), index=today.month-1)
-
-    # ✅ 해당 company 직원의 leave_usage만 필터링
-    emp_names_in_company = ce["Name"].tolist()
-    cu_filtered = cu[cu["Employee"].isin(emp_names_in_company)] if not cu.empty else cu
 
     cal = calendar.monthcalendar(c_year, c_month)
     month_name_str = calendar.month_name[c_month]
@@ -562,7 +584,6 @@ elif menu == "3. Plan/Submit Leave":
             if upsert_table("leave_usage", updated):
                 st.success("✅ Saved!"); time.sleep(1); st.rerun()
 
-    # ✅ Current Balances — 해당 company 직원만, employees 삭제 없음
     st.subheader("📊 Current Balances")
     th = cl.groupby("Employee")["Hours_Worked"].sum().reset_index() if not cl.empty else pd.DataFrame(columns=["Employee","Hours_Worked"])
     tu = cu_filtered[cu_filtered["Status"] == "Used"].groupby("Employee").agg({"Vacation_Used": "sum", "Sick_Used": "sum"}).reset_index() if not cu_filtered.empty else pd.DataFrame(columns=["Employee","Vacation_Used","Sick_Used"])
@@ -586,7 +607,7 @@ elif menu == "3. Plan/Submit Leave":
                 if upsert_table("employees", emp_data):
                     st.success("✅ Saved!"); time.sleep(1); st.rerun()
         with col_b2:
-            # ✅ Current Balances의 Delete는 leave_usage 데이터만 삭제 — employees 건드리지 않음
+            # ✅ Current Balances에서는 leave_usage 데이터만 삭제 — employees 절대 건드리지 않음
             if st.button("🗑️ Delete Leave Data (Selected)", use_container_width=True, disabled=not is_admin()):
                 if edited_summ["Select"].any():
                     names = edited_summ[edited_summ["Select"] == True]["Name"].tolist()
@@ -609,8 +630,9 @@ elif menu == "3. Plan/Submit Leave":
                 st.error("⚠️ Permanently delete selected entries?"); uy_c, un_c = st.columns([1, 4])
                 with uy_c:
                     if st.button("Yes", key="uy_usage"):
+                        sel_idx = ed_usage[ed_usage["Select"] == True].index.tolist()
                         cu_all = load_leave_usage()
-                        updated = cu_all.drop(cu_all[cu_all.apply(lambda r: r.to_dict() in ed_usage[ed_usage["Select"]==True].drop(columns=["Select"]).to_dict("records"), axis=1)].index).reset_index(drop=True)
+                        updated = cu_all.drop(index=[i for i in sel_idx if i < len(cu_all)]).reset_index(drop=True)
                         if upsert_table("leave_usage", updated):
                             st.session_state.usage_del_conf = False; st.success("✅ Saved!"); time.sleep(1); st.rerun()
                 with un_c:
