@@ -599,7 +599,7 @@ elif menu == "3. Plan/Submit Leave":
     if summ:
         df_summ = pd.DataFrame(summ); df_summ.insert(0, "Select", False)
         def apply_st(val): return "background-color: #FFC0CB; color: black; font-weight: bold" if isinstance(val, (int, float)) and val < 0 else "background-color: #FFFF00; color: black; font-weight: bold"
-        edited_summ = st.data_editor(df_summ.style.applymap(apply_st, subset=["Retained Vacation", "Retained Sick Leave"]).format(precision=2), use_container_width=True, hide_index=True, key="bal_editor")
+        edited_summ = st.data_editor(df_summ.style.map(apply_st, subset=["Retained Vacation", "Retained Sick Leave"]).format(precision=2), use_container_width=True, hide_index=True, key="bal_editor")
         col_b1, col_b2 = st.columns(2)
         with col_b1:
             if st.button("💾 Save Balances Changes", use_container_width=True, disabled=not is_admin()):
