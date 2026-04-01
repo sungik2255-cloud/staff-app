@@ -414,7 +414,8 @@ elif menu == "2. Log Worked Hours":
                     udf["Hours_Worked"] = pd.to_numeric(udf["Hours_Worked"], errors="coerce").fillna(0)
                     udf["Status"] = "Employed"
                     valid_names = st.session_state.emp_df["Name"].tolist()
-                    udf["_valid"] = udf["Employee"].isin(valid_names)
+                    valid_names_lower = [n.lower() for n in valid_names]
+                    udf["_valid"] = udf["Employee"].str.lower().isin(valid_names_lower)
                     invalid_names = udf[~udf["_valid"]]["Employee"].unique().tolist()
                     valid_udf = udf[udf["_valid"]].drop(columns=["_valid"]).reset_index(drop=True)
                     col_info1, col_info2 = st.columns(2)
