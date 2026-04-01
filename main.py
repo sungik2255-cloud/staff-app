@@ -315,7 +315,7 @@ elif menu == "2. Log Worked Hours":
     if sc != st.session_state.selected_company:
         st.session_state.selected_company = sc
 
-    dr = st.date_input("Select Work Period", value=(date.today(), date.today()))
+    dr = st.date_input("Select Work Period", value=(date(2026, 1, 1), date.today()))
     ce = st.session_state.emp_df[st.session_state.emp_df["Location"] == sc].copy()
 
     if not ce.empty:
