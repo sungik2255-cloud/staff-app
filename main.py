@@ -409,8 +409,8 @@ elif menu == "2. Log Worked Hours":
                 if missing:
                     st.error(f"❌ 필수 컬럼 없음: {missing}")
                 else:
-                    udf["Start_Date"] = pd.to_datetime(udf["Start_Date"], infer_datetime_format=True).dt.strftime("%Y-%m-%d")
-                    udf["End_Date"]   = pd.to_datetime(udf["End_Date"],   infer_datetime_format=True).dt.strftime("%Y-%m-%d")
+                    udf["Start_Date"] = pd.to_datetime(udf["Start_Date"], format='mixed').dt.strftime("%Y-%m-%d")
+                    udf["End_Date"]   = pd.to_datetime(udf["End_Date"],   format='mixed').dt.strftime("%Y-%m-%d")
                     udf["Hours_Worked"] = pd.to_numeric(udf["Hours_Worked"], errors="coerce").fillna(0)
                     udf["Status"] = "Employed"
                     valid_names = st.session_state.emp_df["Name"].tolist()
