@@ -454,7 +454,8 @@ elif menu == "2. Log Worked Hours":
             emp_opts = ["All Employees"] + sorted(emp_in_company)
             sfn = st.selectbox("Select Employee", options=emp_opts, key="filter_emp")
             fdf = st.session_state.log_df.copy()
-            fdf = fdf[fdf["Employee"].isin(emp_in_company)]
+            emp_in_company_lower = [n.lower() for n in emp_in_company]
+            fdf = fdf[fdf["Employee"].str.lower().isin(emp_in_company_lower)]
             if sfn != "All Employees": fdf = fdf[fdf["Employee"] == sfn]
             if isinstance(dr, (list, tuple)) and len(dr) == 2:
                 fdf = fdf[(fdf["Start_Date"] >= dr[0]) & (fdf["Start_Date"] <= dr[1])]
