@@ -564,6 +564,7 @@ elif menu == "3. Plan/Submit Leave":
     with cy1: today = date.today(); c_year = st.selectbox("Year", range(today.year-1, today.year+2), index=1)
     with cm1: c_month = st.selectbox("Month", range(1, 13), index=today.month-1)
 
+    calendar.setfirstweekday(6)  # 일요일 시작
     cal = calendar.monthcalendar(c_year, c_month)
     month_name_str = calendar.month_name[c_month]
 
