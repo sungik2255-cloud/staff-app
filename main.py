@@ -43,6 +43,21 @@ def upsert_table(table_name, df):
         st.error(f"❌ 저장 실패: {e}")
         return False
 
+def write_sheet(sheet_name, df):
+    for attempt in range(3):
+        try:
+            ws = gc.open_by_key(SPREADSHEET_ID).worksheet(sheet_name)
+            ws.clear()
+            ws.update([df.columns.tolist()] + df.values.tolist())
+            return True
+        except Exception as e:
+            if "Quota" in str(e) and attempt < 2:
+                st.warning(f"⚠️ API 한도 초과, {attempt+1}번째 재시도 중...")
+                time.sleep(10)
+            else:
+                st.error(f"❌ 저장 실패! Google Sheets에 저장되지 않았습니다.\n원인: {e}")
+                return False
+
 def delete_employees_by_name(names_to_delete):
     try:
         emp_data = load_employees()
